@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/AppIcon.png" width="128" height="128" alt="SSDEjector Icon" />
+<img src="assets/SSDEjector_M2_Icon.png" width="128" height="128" alt="SSDEjector Icon" />
 
 # ⚡ SSDEjector for macOS
 
@@ -10,7 +10,7 @@
 [![Architecture](https://img.shields.io/badge/Architecture-Apple%20Silicon%20(M1%2FM2%2FM3%2FM4)%20%26%20Intel-blue?style=for-the-badge&logo=apple)](https://apple.com)
 [![Swift](https://img.shields.io/badge/Language-Swift%206.0-orange?style=for-the-badge&logo=swift)](https://swift.org)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v7.5.0-purple?style=for-the-badge)](https://github.com/VedantNarayan/SSDEjector/releases)
+[![Release](https://img.shields.io/badge/Release-v7.7.1-purple?style=for-the-badge)](https://github.com/VedantNarayan/SSDEjector/releases)
 
 <p align="center">
   <b>Double-Tap F4 to Eject</b> • <b>Dynamic M.2 Menu Bar Icon</b> • <b>Universal 3-Tier Storage Orchestrator</b> • <b>Smart System Daemon Bypass</b> • <b>Battery Sleep-Saver</b> • <b>MacBook Physical Speaker Chime</b>
