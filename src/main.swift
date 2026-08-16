@@ -6,7 +6,7 @@ import Foundation
 
 // ==============================================================================
 // SSDEjector - Native macOS SSD Management & Instant Ejector
-// Production-Hardened Engine with Atomic Concurrency & Self-Healing
+// Smart System Daemon Bypass & Universal Dynamic Document Spillover
 // Copyright (c) 2026 Vedant Narayan. Released under the MIT License.
 // ==============================================================================
 
@@ -76,6 +76,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var maintenanceTimer: Timer?
     private var wasAutoUnmountedForSleep = false
 
+    // Known macOS background system daemons that are safe to force-unmount automatically
+    private let systemDaemons = Set([
+        "mds", "mds_stores", "mdworker", "mdworker_shared", "mdbulkimport",
+        "mdsync", "fseventsd", "quicklookd", "diskarbitrationd", "revisiond",
+        "backupd", "fileproviderd", "deleted", "storebench"
+    ])
+
     // Concurrency Locks
     private let ejectLock = NSLock()
     private var isEjecting = false
@@ -89,7 +96,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         gAppDelegate = self
         loadConfiguration()
-        logDebug("SSDEjector initialized for target volume: \(ssdName)")
+        logDebug("SSDEjector initialized with Smart System Daemon Bypass.")
 
         applyHidutilMapping()
         setupMenuBar()
@@ -98,7 +105,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupCarbonF4HotKey()
         updateStatus()
 
-        // Self-Healing: Check if drive is connected or disconnected at launch
         if FileManager.default.fileExists(atPath: ssdMountPath) {
             syncAllSpilloverFolders()
         } else {
@@ -153,7 +159,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             var activeManifest: [String: String] = [:]
             var totalSyncedFiles = 0
 
-            // 1. Discover all subfolders in external Documents_Archive
             if let entries = try? FileManager.default.contentsOfDirectory(atPath: documentsArchive) {
                 for item in entries {
                     if item.hasPrefix(".") { continue }
@@ -173,7 +178,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                 if success {
                                     let count = out.components(separatedBy: "\n").filter { !$0.isEmpty && !$0.hasSuffix("/") && !$0.contains("building file list") && !$0.contains("sent ") && !$0.contains("total size") }.count
                                     totalSyncedFiles += count
-                                    // Remove empty directory hull recursively
                                     try? FileManager.default.removeItem(atPath: localFolder)
                                     try? FileManager.default.createSymbolicLink(atPath: localFolder, withDestinationPath: extFolder)
                                     logDebug("Linked Documents/\(item) -> \(extFolder)")
@@ -187,7 +191,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
 
-            // Save manifest for offline lookup
             if let data = try? JSONSerialization.data(withJSONObject: activeManifest, options: .prettyPrinted) {
                 try? data.write(to: URL(fileURLWithPath: self.manifestPath))
             }
@@ -415,8 +418,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         handleEjectRequested()
     }
 
+    // MARK: - Smart Eject with System Daemon Bypass
     func handleEjectRequested() {
-        // 1. Concurrency Check
         ejectLock.lock()
         if isEjecting {
             ejectLock.unlock()
@@ -446,12 +449,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        logDebug("Direct eject failed. Finding blocking PIDs...")
-        let blockingPIDs = getBlockingPIDs(ejectOutput: ejectOutput)
-        logDebug("Found blocking PIDs: \(blockingPIDs)")
+        logDebug("Direct eject encountered lock. Inspecting PIDs...")
+        let allBlockingPIDs = getBlockingPIDs(ejectOutput: ejectOutput)
 
-        if blockingPIDs.isEmpty {
+        // Filter PIDs: Separate User Applications from System Background Daemons
+        var userAppPIDs: [String] = []
+        var userAppDescriptions: [String] = []
+
+        for pid in allBlockingPIDs {
+            let procPath = getProcessPath(pid: pid)
+            let cleanName = getCleanProcessName(procPath: procPath, pid: pid)
+            let baseName = procPath.components(separatedBy: "/").last ?? cleanName
+
+            // If it's a known system background daemon (Spotlight mds_stores, fseventsd, etc.), bypass it!
+            if systemDaemons.contains(cleanName) || systemDaemons.contains(baseName) {
+                logDebug("Smart Bypass: PID \(pid) is system daemon (\(cleanName)). Skipping user prompt.")
+            } else {
+                userAppPIDs.append(pid)
+                userAppDescriptions.append("• \(cleanName) (PID: \(pid))")
+            }
+        }
+
+        // Case A: Only system background daemons are locking -> Force unmount safely in < 0.1s!
+        if userAppPIDs.isEmpty {
+            logDebug("Only system daemons active on SSD. Executing safe automatic force-unmount...")
+            _ = runCommand("/bin/sync", [])
             let (forceSuccess, _) = runCommand("/usr/sbin/diskutil", ["unmount", "force", ssdMountPath])
+            _ = runCommand("/usr/sbin/diskutil", ["eject", ssdMountPath])
+
             if forceSuccess || !FileManager.default.fileExists(atPath: ssdMountPath) {
                 handleEjectSuccess()
             } else {
@@ -460,18 +485,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        var appDescriptions: [String] = []
-        for pid in blockingPIDs {
-            let procPath = getProcessPath(pid: pid)
-            let cleanName = getCleanProcessName(procPath: procPath, pid: pid)
-            appDescriptions.append("• \(cleanName) (PID: \(pid))")
-        }
-
+        // Case B: Real user applications are open -> Prompt with native modal
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Active Applications Using SSD"
         alert.informativeText = "The external SSD (\(ssdName)) is currently being used by:\n\n" +
-            appDescriptions.joined(separator: "\n") +
+            userAppDescriptions.joined(separator: "\n") +
             "\n\nWould you like to close these applications and eject?"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Quit Apps & Eject")
@@ -481,12 +500,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let response = alert.runModal()
 
         if response == .alertFirstButtonReturn {
-            logDebug("User selected Quit Apps & Eject. Terminating PIDs: \(blockingPIDs)")
-            for pid in blockingPIDs {
+            logDebug("User selected Quit Apps & Eject. Terminating User PIDs: \(userAppPIDs)")
+            for pid in userAppPIDs {
                 _ = runCommand("/bin/kill", ["-15", pid])
             }
             Thread.sleep(forTimeInterval: 0.4)
-            for pid in blockingPIDs {
+            for pid in userAppPIDs {
                 _ = runCommand("/bin/kill", ["-9", pid])
             }
             Thread.sleep(forTimeInterval: 0.2)
