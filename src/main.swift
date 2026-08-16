@@ -6,7 +6,7 @@ import Foundation
 
 // ==============================================================================
 // SSDEjector - Native macOS SSD Management & Universal Storage Orchestrator
-// 3-Tier Storage Engine: Mirror Sync, Spillover Reclaim, & Direct Offload
+// Native M.2 App Icon & Dynamic Colorful / Grayscale Status Item
 // Copyright (c) 2026 Vedant Narayan. Released under the MIT License.
 // ==============================================================================
 
@@ -73,6 +73,9 @@ func carbonHotKeyCallback(nextHandler: EventHandlerCallRef?, theEvent: EventRef?
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
+    private var connectedIcon: NSImage?
+    private var disconnectedIcon: NSImage?
+
     private var ssdMountPath: String = "/Volumes/Mac_EXT"
     private var ssdName: String = "Mac_EXT"
     private var ssdVolumeUUID: String = ""
@@ -99,9 +102,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         gAppDelegate = self
         loadConfiguration()
-        logDebug("SSDEjector 6.1 (3-Tier Storage Orchestrator) initialized.")
+        logDebug("SSDEjector 7.0 initialized with Dynamic M.2 Menu Bar Icon.")
 
         applyHidutilMapping()
+        loadIcons()
         setupMenuBar()
         setupVolumeNotifications()
         setupSleepWakePowerSaver()
@@ -118,6 +122,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if FileManager.default.fileExists(atPath: self?.ssdMountPath ?? "") {
                 self?.syncAllTrackedFolders()
             }
+        }
+    }
+
+    private func loadIcons() {
+        let resPath = Bundle.main.resourcePath ?? ""
+        let assetsPath = "\(FileManager.default.homeDirectoryForCurrentUser.path)/SSDEjector/assets"
+
+        let connPath = FileManager.default.fileExists(atPath: "\(resPath)/menubar_connected.png") ?
+            "\(resPath)/menubar_connected.png" : "\(assetsPath)/menubar_connected.png"
+        let disconnPath = FileManager.default.fileExists(atPath: "\(resPath)/menubar_disconnected.png") ?
+            "\(resPath)/menubar_disconnected.png" : "\(assetsPath)/menubar_disconnected.png"
+
+        if let img = NSImage(contentsOfFile: connPath) {
+            img.isTemplate = false // Keep full vibrant colors!
+            img.size = NSSize(width: 18, height: 18)
+            self.connectedIcon = img
+        }
+
+        if let img = NSImage(contentsOfFile: disconnPath) {
+            img.isTemplate = false // Grayscale
+            img.size = NSSize(width: 18, height: 18)
+            self.disconnectedIcon = img
         }
     }
 
@@ -194,7 +220,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 _ = self.runCommand("/bin/mkdir", ["-p", remotePath])
 
                 if item.mode == "mirror" {
-                    // TIER 1: Local Buffer + Background Mirror
                     if FileManager.default.fileExists(atPath: localPath) {
                         let (success, out) = self.runCommand("/usr/bin/rsync", ["-av", "\(localPath)/", "\(remotePath)/"])
                         if success {
@@ -203,7 +228,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         }
                     }
                 } else if item.mode == "spillover" {
-                    // TIER 2: Temporary Spillover + Auto-Reclaim Internal Space
                     let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: localPath)) != nil
                     if !isSymlink {
                         var isDir: ObjCBool = false
@@ -218,7 +242,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         }
                     }
                 } else if item.mode == "offload" {
-                    // TIER 3: Direct External Storage (100% on SSD)
                     let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: localPath)) != nil
                     if !isSymlink {
                         var isDir: ObjCBool = false
@@ -460,10 +483,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupMenuBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let button = statusItem.button {
-            button.title = "🟢"
-        }
-        rebuildMenu(isMounted: FileManager.default.fileExists(atPath: ssdMountPath))
+        updateStatus()
     }
 
     private func updateStatus() {
@@ -472,7 +492,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             detectVolumeUUID()
         }
         if let button = statusItem.button {
-            button.title = isMounted ? "🟢" : "⚪"
+            button.title = ""
+            button.image = isMounted ? connectedIcon : disconnectedIcon
+            button.imagePosition = .imageOnly
         }
         rebuildMenu(isMounted: isMounted)
     }
