@@ -6,7 +6,7 @@ import Foundation
 
 // ==============================================================================
 // SSDEjector - Native macOS SSD Management & Universal Storage Orchestrator
-// Real-Time Dynamic Menu Bar Sync Progress HUD & Auto-Eject on Completion
+// Visual Modern Card UI with Live ETA & Dynamic Menu Bar HUD
 // Copyright (c) 2026 Vedant Narayan. Released under the MIT License.
 // ==============================================================================
 
@@ -109,7 +109,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         gAppDelegate = self
         loadConfiguration()
-        logDebug("SSDEjector 8.1 (Dynamic Menu Bar HUD & Auto-Eject Engine) initialized.")
+        logDebug("SSDEjector 8.2 (Visual Card UI with Live ETA) initialized.")
 
         applyHidutilMapping()
         loadIcons()
@@ -200,7 +200,41 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - 3-Tier Multi-Directory Storage Engine with Real-Time HUD
+    // MARK: - Live ETA Calculation Helper
+    private func getFolderSyncStats(localPath: String, remotePath: String) -> (percentage: Double, progressInfo: String, etaString: String) {
+        let fm = FileManager.default
+
+        func quickSize(_ path: String) -> Int64 {
+            guard let enumerator = fm.enumerator(at: URL(fileURLWithPath: path), includingPropertiesForKeys: [.fileSizeKey], options: [.skipsHiddenFiles]) else { return 0 }
+            var size: Int64 = 0
+            for case let fileURL as URL in enumerator {
+                let res = try? fileURL.resourceValues(forKeys: [.fileSizeKey])
+                size += Int64(res?.fileSize ?? 0)
+            }
+            return size
+        }
+
+        let localSize = quickSize(localPath)
+        let remoteSize = quickSize(remotePath)
+
+        if localSize <= 0 { return (1.0, "Complete", "0s") }
+
+        let pct = min(1.0, max(0.0, Double(remoteSize) / Double(localSize)))
+        let remainingBytes = max(0, localSize - remoteSize)
+
+        let speedBytesPerSec: Double = 35_000_000 // Real-world USB 2.0 transfer speed ~35 MB/s
+        let remainingSec = Int(Double(remainingBytes) / speedBytesPerSec)
+
+        let etaStr = remainingSec < 60 ? "\(max(remainingSec, 5))s" : "\(remainingSec / 60)m \(remainingSec % 60)s"
+        let pctInt = Int(pct * 100)
+
+        let localMB = String(format: "%.1f MB", Double(localSize) / 1_000_000.0)
+        let remoteMB = String(format: "%.1f MB", Double(remoteSize) / 1_000_000.0)
+
+        return (pct, "\(remoteMB) of \(localMB) (\(pctInt)%)", etaStr)
+    }
+
+    // MARK: - 3-Tier Multi-Directory Storage Engine with Real-Time ETA HUD
     func syncAllTrackedFolders() {
         syncLock.lock()
         if isSyncing {
@@ -225,7 +259,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
                     if shouldAutoEject {
                         logDebug("Auto-eject triggered after sync completion.")
-                        self.showNotification(title: "⚡ Sync Complete", subtitle: "All files synchronized safely. Ejecting \(self.ssdName)...")
+                        self.showNotification(title: "⚡ Sync Complete", subtitle: "All files synchronized. Safely unmounting \(self.ssdName)...")
                         self.handleEjectRequested()
                     }
                 }
@@ -233,23 +267,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             guard FileManager.default.fileExists(atPath: self.ssdMountPath) else { return }
             let folders = self.getTrackedFolders()
-            let totalFolders = folders.count
             var totalSyncedFiles = 0
 
-            for (idx, item) in folders.enumerated() {
+            for (_, item) in folders.enumerated() {
                 let localPath = (item.localPath as NSString).expandingTildeInPath
                 let folderName = (localPath as NSString).lastPathComponent
                 let remotePath = "\(self.ssdMountPath)/Documents_Archive/\(folderName)"
-
-                DispatchQueue.main.async {
-                    self.currentSyncStatusString = " 🔄 Syncing \(idx + 1)/\(totalFolders): \(folderName)"
-                    self.updateStatus()
-                }
 
                 _ = self.runCommand("/bin/mkdir", ["-p", remotePath])
 
                 if item.mode == "mirror" {
                     if FileManager.default.fileExists(atPath: localPath) {
+                        // Calculate live ETA for menu bar
+                        let stats = self.getFolderSyncStats(localPath: localPath, remotePath: remotePath)
+                        DispatchQueue.main.async {
+                            self.currentSyncStatusString = " 🔄 \(folderName) (\(Int(stats.percentage * 100))% • ~\(stats.etaString))"
+                            self.updateStatus()
+                        }
+
                         let (success, out) = self.runCommand("/usr/bin/rsync", ["-av", "\(localPath)/", "\(remotePath)/"])
                         if success {
                             let count = out.components(separatedBy: "\n").filter { !$0.isEmpty && !$0.hasSuffix("/") && !$0.contains("building file list") && !$0.contains("sent ") && !$0.contains("total size") && !$0.contains("Transfer starting:") }.count
@@ -523,8 +558,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = statusItem.button {
             button.image = isMounted ? connectedIcon : disconnectedIcon
             button.imageScaling = .scaleProportionallyUpOrDown
-            
-            // Dynamic Live Progress Text next to M.2 Icon
+
             if !currentSyncStatusString.isEmpty {
                 button.title = currentSyncStatusString
                 button.imagePosition = .imageLeft
@@ -546,7 +580,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(infoItem)
 
             if isSyncing {
-                let syncItem = NSMenuItem(title: "🔄 Sync in Progress...", action: nil, keyEquivalent: "")
+                let syncItem = NSMenuItem(title: "🔄 Sync Active (\(currentSyncStatusString.trimmingCharacters(in: .whitespaces)))", action: nil, keyEquivalent: "")
                 syncItem.isEnabled = false
                 menu.addItem(syncItem)
             }
@@ -641,7 +675,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         handleEjectRequested()
     }
 
-    // MARK: - Smart Eject with Active Data Protection Shield & Dynamic Progress
+    // MARK: - Smart Eject with Visual Card UI & Live Progress
     func handleEjectRequested() {
         ejectLock.lock()
         if isEjecting {
@@ -676,7 +710,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let allBlockingPIDs = getBlockingPIDs(ejectOutput: ejectOutput)
 
         var criticalSyncPIDs: [String] = []
-        var criticalSyncDescriptions: [String] = []
         var regularUserAppPIDs: [String] = []
         var regularUserAppDescriptions: [String] = []
 
@@ -689,7 +722,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 logDebug("Smart Bypass: PID \(pid) is system daemon (\(cleanName)). Skipping user prompt.")
             } else if criticalSyncDaemons.contains(cleanName) || criticalSyncDaemons.contains(baseName) {
                 criticalSyncPIDs.append(pid)
-                criticalSyncDescriptions.append("• \(cleanName) (PID: \(pid)) — [Active File Sync / Write Task]")
             } else {
                 regularUserAppPIDs.append(pid)
                 regularUserAppDescriptions.append("• \(cleanName) (PID: \(pid))")
@@ -713,73 +745,93 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
 
-        // SCENARIO 2: CRITICAL ACTIVE DATA PROTECTION / FILE SYNC IN PROGRESS
-        // Force eject is strictly DISABLED to prevent file corruption.
+        // SCENARIO 2: VISUAL CARD UI FOR CRITICAL DATA PROTECTION (Clean, Modern, Not Text-Heavy)
         if !criticalSyncPIDs.isEmpty {
-            logDebug("Critical data sync active (\(criticalSyncPIDs)). Showing High-Severity Data Protection Modal...")
+            logDebug("Critical data sync active (\(criticalSyncPIDs)). Displaying Modern Visual Card Dialog...")
+
+            // Calculate live sync stats for the active folder
+            let localDocs = "\(FileManager.default.homeDirectoryForCurrentUser.path)/Documents"
+            let remoteDocs = "\(ssdMountPath)/Documents_Archive/Documents"
+            let stats = getFolderSyncStats(localPath: localDocs, remotePath: remoteDocs)
 
             let alert = NSAlert()
-            alert.messageText = "🛑 ACTIVE DATA PROTECTION SHIELD: Sync in Progress"
-            alert.informativeText = """
-            ⚠️ A critical background file transfer or data synchronization is currently writing data to '\(ssdName)':
+            alert.messageText = "🛡️ Active Data Sync in Progress"
+            alert.informativeText = "Writing files to '\(ssdName)' in background. Force eject is paused to prevent corrupted files."
+            alert.alertStyle = .informational
 
-            \(criticalSyncDescriptions.joined(separator: "\n"))
+            // Clean Visual Card Container
+            let cardView = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 95))
 
-            🚫 Force Eject is DISABLED to prevent data corruption or permanent file loss.
+            // 1. Task info label with icon
+            let taskLabel = NSTextField(frame: NSRect(x: 4, y: 70, width: 332, height: 20))
+            taskLabel.stringValue = "📁 Syncing: Documents  •  ⚡ ~35 MB/s"
+            taskLabel.isEditable = false
+            taskLabel.isBordered = false
+            taskLabel.backgroundColor = .clear
+            taskLabel.font = NSFont.boldSystemFont(ofSize: 12)
+            cardView.addSubview(taskLabel)
 
-            Select 'Auto-Eject When Sync Completes' and SSDEjector will dynamically show progress in your Menu Bar and safely eject the moment writing finishes!
-            """
-            alert.alertStyle = .critical
+            // 2. Determinate Progress Bar
+            let progressIndicator = NSProgressIndicator(frame: NSRect(x: 4, y: 46, width: 332, height: 16))
+            progressIndicator.isIndeterminate = false
+            progressIndicator.minValue = 0.0
+            progressIndicator.maxValue = 1.0
+            progressIndicator.doubleValue = stats.percentage
+            cardView.addSubview(progressIndicator)
 
-            // Custom Accessory View with Live Progress Bar
-            let accessoryView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 44))
-            let progressIndicator = NSProgressIndicator(frame: NSRect(x: 0, y: 22, width: 320, height: 16))
-            progressIndicator.isIndeterminate = true
-            progressIndicator.startAnimation(nil)
-            accessoryView.addSubview(progressIndicator)
+            // 3. Stats & Live ETA
+            let statsLabel = NSTextField(frame: NSRect(x: 4, y: 22, width: 332, height: 18))
+            statsLabel.stringValue = "📊 \(stats.progressInfo)   •   ⏳ ~\(stats.etaString) remaining"
+            statsLabel.isEditable = false
+            statsLabel.isBordered = false
+            statsLabel.backgroundColor = .clear
+            statsLabel.textColor = .secondaryLabelColor
+            statsLabel.font = NSFont.systemFont(ofSize: 11)
+            cardView.addSubview(statsLabel)
 
-            let statusLabel = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 18))
-            statusLabel.stringValue = "🔄 Writing files to external drive in background..."
-            statusLabel.isEditable = false
-            statusLabel.isBordered = false
-            statusLabel.backgroundColor = .clear
-            statusLabel.textColor = .secondaryLabelColor
-            statusLabel.font = NSFont.systemFont(ofSize: 11)
-            accessoryView.addSubview(statusLabel)
+            // 4. Safe Auto-Eject Badge
+            let badgeLabel = NSTextField(frame: NSRect(x: 4, y: 0, width: 332, height: 18))
+            badgeLabel.stringValue = "🔒 Safe Auto-Eject will unmount drive automatically when done."
+            badgeLabel.isEditable = false
+            badgeLabel.isBordered = false
+            badgeLabel.backgroundColor = .clear
+            badgeLabel.textColor = .systemGreen
+            badgeLabel.font = NSFont.boldSystemFont(ofSize: 10.5)
+            cardView.addSubview(badgeLabel)
 
-            alert.accessoryView = accessoryView
+            alert.accessoryView = cardView
 
-            alert.addButton(withTitle: "⏳ Auto-Eject When Sync Completes (Recommended)")
-            alert.addButton(withTitle: "🛑 Safely Stop Sync & Eject Immediately")
+            alert.addButton(withTitle: "⏳ Auto-Eject When Done (~\(stats.etaString))")
+            alert.addButton(withTitle: "🛑 Stop & Eject Now")
+            alert.addButton(withTitle: "Cancel")
 
             let response = alert.runModal()
 
             if response == .alertFirstButtonReturn {
-                logDebug("User chose Auto-Eject When Sync Completes.")
+                logDebug("User chose Auto-Eject When Done.")
                 syncLock.lock()
                 self.pendingEjectOnSyncComplete = true
                 syncLock.unlock()
-                
-                showNotification(title: "⏳ Auto-Eject Armed", subtitle: "Monitoring progress in Menu Bar. Drive will safely eject automatically when done.")
+                showNotification(title: "⏳ Auto-Eject Armed", subtitle: "SSDEjector will automatically eject \(ssdName) in ~\(stats.etaString).")
                 return
             } else if response == .alertSecondButtonReturn {
-                logDebug("User chose Safely Stop Sync & Eject Immediately.")
+                logDebug("User chose Stop & Eject Now.")
                 for pid in criticalSyncPIDs {
                     _ = runCommand("/bin/kill", ["-15", pid])
                 }
-                Thread.sleep(forTimeInterval: 0.5)
+                Thread.sleep(forTimeInterval: 0.4)
                 for pid in criticalSyncPIDs {
                     _ = runCommand("/bin/kill", ["-9", pid])
                 }
                 _ = runCommand("/bin/sync", [])
-                Thread.sleep(forTimeInterval: 0.3)
+                Thread.sleep(forTimeInterval: 0.2)
                 _ = runCommand("/usr/sbin/diskutil", ["unmount", ssdMountPath])
                 _ = runCommand("/usr/sbin/diskutil", ["eject", ssdMountPath])
 
                 if !FileManager.default.fileExists(atPath: ssdMountPath) {
                     handleEjectSuccess()
                 } else {
-                    showNotification(title: "Eject Failed", subtitle: "Could not unmount drive cleanly after stopping sync.")
+                    showNotification(title: "Eject Failed", subtitle: "Could not unmount drive cleanly.")
                 }
                 return
             }
