@@ -6,7 +6,7 @@ import Foundation
 
 // ==============================================================================
 // SSDEjector - Native macOS SSD Management & Universal Storage Orchestrator
-// Native M.2 App Icon & Dynamic Colorful / Grayscale Status Item
+// Active Data Protection Shield & High-Severity Colored Sync Warning Engine
 // Copyright (c) 2026 Vedant Narayan. Released under the MIT License.
 // ==============================================================================
 
@@ -90,6 +90,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         "backupd", "fileproviderd", "deleted", "storebench"
     ])
 
+    private let criticalSyncDaemons = Set([
+        "rsync", "cp", "mv", "tar", "ditto", "qemu-img", "hdiutil", "dd",
+        "qemu-system-aarch64", "fsck_hfs", "fsck_apfs"
+    ])
+
     private let ejectLock = NSLock()
     private var isEjecting = false
     private let syncLock = NSLock()
@@ -102,7 +107,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         gAppDelegate = self
         loadConfiguration()
-        logDebug("SSDEjector 7.0 initialized with Dynamic M.2 Menu Bar Icon.")
+        logDebug("SSDEjector 8.0 (Active Data Protection Shield) initialized.")
 
         applyHidutilMapping()
         loadIcons()
@@ -602,7 +607,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         handleEjectRequested()
     }
 
-    // MARK: - Smart Eject with System Daemon Bypass
+    // MARK: - Smart Eject with Active Data Protection Shield
     func handleEjectRequested() {
         ejectLock.lock()
         if isEjecting {
@@ -636,8 +641,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         logDebug("Direct eject encountered lock. Inspecting PIDs...")
         let allBlockingPIDs = getBlockingPIDs(ejectOutput: ejectOutput)
 
-        var userAppPIDs: [String] = []
-        var userAppDescriptions: [String] = []
+        var criticalSyncPIDs: [String] = []
+        var criticalSyncDescriptions: [String] = []
+        var regularUserAppPIDs: [String] = []
+        var regularUserAppDescriptions: [String] = []
 
         for pid in allBlockingPIDs {
             let procPath = getProcessPath(pid: pid)
@@ -646,13 +653,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             if systemDaemons.contains(cleanName) || systemDaemons.contains(baseName) {
                 logDebug("Smart Bypass: PID \(pid) is system daemon (\(cleanName)). Skipping user prompt.")
+            } else if criticalSyncDaemons.contains(cleanName) || criticalSyncDaemons.contains(baseName) {
+                criticalSyncPIDs.append(pid)
+                criticalSyncDescriptions.append("• \(cleanName) (PID: \(pid)) — [Active Data Protection / File Sync]")
             } else {
-                userAppPIDs.append(pid)
-                userAppDescriptions.append("• \(cleanName) (PID: \(pid))")
+                regularUserAppPIDs.append(pid)
+                regularUserAppDescriptions.append("• \(cleanName) (PID: \(pid))")
             }
         }
 
-        if userAppPIDs.isEmpty {
+        // SCENARIO 1: Only system daemons -> Silent instant auto force-eject
+        if criticalSyncPIDs.isEmpty && regularUserAppPIDs.isEmpty {
             logDebug("Only system daemons active on SSD. Executing safe automatic force-unmount...")
             _ = runCommand("/bin/sync", [])
             let (forceSuccess, _) = runCommand("/usr/sbin/diskutil", ["unmount", "force", ssdMountPath])
@@ -667,10 +678,64 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         NSApp.activate(ignoringOtherApps: true)
+
+        // SCENARIO 2: CRITICAL ACTIVE DATA PROTECTION / FILE SYNC IN PROGRESS
+        // Force eject is strictly DISABLED to prevent file corruption.
+        if !criticalSyncPIDs.isEmpty {
+            logDebug("Critical data sync active (\(criticalSyncPIDs)). Showing High-Severity Data Protection Modal...")
+
+            let alert = NSAlert()
+            alert.messageText = "🛑 ACTIVE DATA PROTECTION SHIELD: Sync in Progress"
+            alert.informativeText = """
+            ⚠️ A critical background file transfer or data synchronization is currently writing data to '\(ssdName)':
+
+            \(criticalSyncDescriptions.joined(separator: "\n"))
+
+            🚫 Force Eject is DISABLED to prevent data corruption or permanent file loss.
+
+            How would you like to proceed?
+            """
+            alert.alertStyle = .critical
+
+            // Primary Safe Action
+            alert.addButton(withTitle: "⏳ Wait for Sync to Finish (Recommended)")
+            alert.addButton(withTitle: "🛑 Safely Stop Sync & Eject")
+
+            let response = alert.runModal()
+
+            if response == .alertFirstButtonReturn {
+                logDebug("User chose to wait for sync to finish.")
+                showNotification(title: "Sync in Progress", subtitle: "Waiting for background transfer to finish. Eject when ready.")
+                return
+            } else if response == .alertSecondButtonReturn {
+                logDebug("User chose to Safely Stop Sync & Eject. Sending SIGTERM to \(criticalSyncPIDs)...")
+                for pid in criticalSyncPIDs {
+                    _ = runCommand("/bin/kill", ["-15", pid])
+                }
+                Thread.sleep(forTimeInterval: 0.5)
+                for pid in criticalSyncPIDs {
+                    _ = runCommand("/bin/kill", ["-9", pid])
+                }
+                _ = runCommand("/bin/sync", [])
+                Thread.sleep(forTimeInterval: 0.3)
+                _ = runCommand("/usr/sbin/diskutil", ["unmount", ssdMountPath])
+                _ = runCommand("/usr/sbin/diskutil", ["eject", ssdMountPath])
+
+                if !FileManager.default.fileExists(atPath: ssdMountPath) {
+                    handleEjectSuccess()
+                } else {
+                    showNotification(title: "Eject Failed", subtitle: "Could not unmount drive cleanly after stopping sync.")
+                }
+                return
+            }
+            return
+        }
+
+        // SCENARIO 3: REGULAR USER APPLICATIONS (DaVinci, Steam, PyCharm, etc.)
         let alert = NSAlert()
         alert.messageText = "Active Applications Using SSD"
         alert.informativeText = "The external SSD (\(ssdName)) is currently being used by:\n\n" +
-            userAppDescriptions.joined(separator: "\n") +
+            regularUserAppDescriptions.joined(separator: "\n") +
             "\n\nWould you like to close these applications and eject?"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Quit Apps & Eject")
@@ -680,12 +745,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let response = alert.runModal()
 
         if response == .alertFirstButtonReturn {
-            logDebug("User selected Quit Apps & Eject. Terminating User PIDs: \(userAppPIDs)")
-            for pid in userAppPIDs {
+            logDebug("User selected Quit Apps & Eject. Terminating User PIDs: \(regularUserAppPIDs)")
+            for pid in regularUserAppPIDs {
                 _ = runCommand("/bin/kill", ["-15", pid])
             }
             Thread.sleep(forTimeInterval: 0.4)
-            for pid in userAppPIDs {
+            for pid in regularUserAppPIDs {
                 _ = runCommand("/bin/kill", ["-9", pid])
             }
             Thread.sleep(forTimeInterval: 0.2)

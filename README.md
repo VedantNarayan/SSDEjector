@@ -10,7 +10,7 @@
 [![Architecture](https://img.shields.io/badge/Architecture-Apple%20Silicon%20(M1%2FM2%2FM3%2FM4)%20%26%20Intel-blue?style=for-the-badge&logo=apple)](https://apple.com)
 [![Swift](https://img.shields.io/badge/Language-Swift%206.0-orange?style=for-the-badge&logo=swift)](https://swift.org)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v7.7.1-purple?style=for-the-badge)](https://github.com/VedantNarayan/SSDEjector/releases)
+[![Release](https://img.shields.io/badge/Release-v8.0.0-purple?style=for-the-badge)](https://github.com/VedantNarayan/SSDEjector/releases)
 
 <p align="center">
   <b>Double-Tap F4 to Eject</b> • <b>Dynamic M.2 Menu Bar Icon</b> • <b>Universal 3-Tier Storage Orchestrator</b> • <b>Smart System Daemon Bypass</b> • <b>Battery Sleep-Saver</b> • <b>MacBook Physical Speaker Chime</b>
@@ -82,6 +82,15 @@ Click **`📁 Manage Synced Folders...`** in the menu bar to track and sync **an
 * Double-tap your physical **F4 / Spotlight key** to safely unmount your external SSD in **< 0.1 seconds**.
 * Powered by **Carbon Global Hotkeys** (`RegisterEventHotKey`) — **Zero Accessibility / TCC permissions required**.
 * Built-in **hardware debouncing (80ms – 550ms)** prevents electrical key bounce from causing accidental triggers.
+
+---
+
+### 🛡️ Active Data Protection Shield (Zero Corruption Guarantee)
+* **Intelligent Write Interception**: If an active background file synchronization or disk-write task (, , , , , ) is in progress, SSDEjector immediately intercepts the ejection.
+* **🚫 Force Eject is DISABLED**: To prevent permanent data corruption and broken file systems, force eject is strictly disabled during active transfers.
+* **High-Severity Warning Modal**: Displays a high-contrast critical warning dialog with two safe options:
+  1. ****: Lets the transfer complete cleanly.
+  2. ****: Gracefully terminates the sync process (), flushes all cached buffers (), and unmounts cleanly without corruption.
 
 ---
 
