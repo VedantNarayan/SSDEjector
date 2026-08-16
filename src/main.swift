@@ -6,7 +6,7 @@ import Foundation
 
 // ==============================================================================
 // SSDEjector - Native macOS SSD Management & Instant Ejector
-// Smart System Daemon Bypass & Universal Dynamic Document Spillover
+// Includes Finder Sidebar Preservation & Smart System Daemon Bypass
 // Copyright (c) 2026 Vedant Narayan. Released under the MIT License.
 // ==============================================================================
 
@@ -76,14 +76,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var maintenanceTimer: Timer?
     private var wasAutoUnmountedForSleep = false
 
-    // Known macOS background system daemons that are safe to force-unmount automatically
     private let systemDaemons = Set([
         "mds", "mds_stores", "mdworker", "mdworker_shared", "mdbulkimport",
         "mdsync", "fseventsd", "quicklookd", "diskarbitrationd", "revisiond",
         "backupd", "fileproviderd", "deleted", "storebench"
     ])
 
-    // Concurrency Locks
     private let ejectLock = NSLock()
     private var isEjecting = false
     private let syncLock = NSLock()
@@ -96,7 +94,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         gAppDelegate = self
         loadConfiguration()
-        logDebug("SSDEjector initialized with Smart System Daemon Bypass.")
+        logDebug("SSDEjector 4.6 initialized (with Finder Sidebar Preservation).")
 
         applyHidutilMapping()
         setupMenuBar()
@@ -174,18 +172,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                             let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: localFolder)) != nil
                             if !isSymlink && isLocalDir.boolValue {
                                 logDebug("Dynamic Spillover: Found offline files in Documents/\(item). Syncing to external...")
-                                let (success, out) = self.runCommand("/usr/bin/rsync", ["-aHAX", "--remove-source-files", "\(localFolder)/", "\(extFolder)/"])
+                                let (success, out) = self.runCommand("/usr/bin/rsync", ["-av", "--remove-source-files", "\(localFolder)/", "\(extFolder)/"])
                                 if success {
-                                    let count = out.components(separatedBy: "\n").filter { !$0.isEmpty && !$0.hasSuffix("/") && !$0.contains("building file list") && !$0.contains("sent ") && !$0.contains("total size") }.count
+                                    let count = out.components(separatedBy: "\n").filter { !$0.isEmpty && !$0.hasSuffix("/") && !$0.contains("building file list") && !$0.contains("sent ") && !$0.contains("total size") && !$0.contains("Transfer starting:") }.count
                                     totalSyncedFiles += count
-                                    try? FileManager.default.removeItem(atPath: localFolder)
-                                    try? FileManager.default.createSymbolicLink(atPath: localFolder, withDestinationPath: extFolder)
-                                    logDebug("Linked Documents/\(item) -> \(extFolder)")
+                                    _ = self.runCommand("/bin/rm", ["-rf", localFolder])
+                                    _ = self.runCommand("/bin/ln", ["-s", extFolder, localFolder])
+                                    logDebug("Successfully moved \(count) file(s) and re-established symlink Documents/\(item) -> \(extFolder)")
+                                    
+                                    // Preserve Finder Sidebar Item
+                                    if item == "Screenshots" {
+                                        self.restoreFinderSidebarItem(path: localFolder)
+                                    }
                                 }
                             }
                         } else {
-                            try? FileManager.default.createSymbolicLink(atPath: localFolder, withDestinationPath: extFolder)
-                            logDebug("Created symlink Documents/\(item) -> \(extFolder)")
+                            _ = self.runCommand("/bin/ln", ["-s", extFolder, localFolder])
                         }
                     }
                 }
@@ -197,10 +199,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             if totalSyncedFiles > 0 {
                 DispatchQueue.main.async {
-                    self.showNotification(title: "⚡ Storage Auto-Synced", subtitle: "Moved \(totalSyncedFiles) offline file(s) across your folders to \(self.ssdName).")
+                    self.showNotification(title: "⚡ Storage Auto-Synced", subtitle: "Moved \(totalSyncedFiles) offline file(s) directly to \(self.ssdName).")
                 }
             }
         }
+    }
+
+    private func restoreFinderSidebarItem(path: String) {
+        let script = """
+        tell application "Finder"
+            select POSIX file "\(path)"
+        end tell
+        tell application "System Events"
+            keystroke "t" using {command down, control down}
+        end tell
+        """
+        _ = runCommand("/usr/bin/osascript", ["-e", script])
     }
 
     private func handleDriveDisconnected() {
@@ -225,6 +239,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 try? FileManager.default.removeItem(atPath: localPath)
                 try? FileManager.default.createDirectory(atPath: localPath, withIntermediateDirectories: true)
                 logDebug("Drive Disconnected -> Converted \(relLocal) to real local folder for offline saving.")
+                
+                // Re-pin to sidebar so offline conversion never unpins it
+                if relLocal.hasSuffix("Screenshots") {
+                    restoreFinderSidebarItem(path: localPath)
+                }
             }
         }
     }
@@ -399,7 +418,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(forName: NSWorkspace.didMountNotification, object: nil, queue: .main) { [weak self] notif in
             guard let self = self else { return }
-            if let path = notif.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL, path.path == self.ssdMountPath {
+            if let path = notif.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL, path.path.contains(self.ssdName) {
                 self.updateStatus()
                 self.syncAllSpilloverFolders()
                 NSSound(named: "Blow")?.play()
@@ -452,7 +471,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         logDebug("Direct eject encountered lock. Inspecting PIDs...")
         let allBlockingPIDs = getBlockingPIDs(ejectOutput: ejectOutput)
 
-        // Filter PIDs: Separate User Applications from System Background Daemons
         var userAppPIDs: [String] = []
         var userAppDescriptions: [String] = []
 
@@ -461,7 +479,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let cleanName = getCleanProcessName(procPath: procPath, pid: pid)
             let baseName = procPath.components(separatedBy: "/").last ?? cleanName
 
-            // If it's a known system background daemon (Spotlight mds_stores, fseventsd, etc.), bypass it!
             if systemDaemons.contains(cleanName) || systemDaemons.contains(baseName) {
                 logDebug("Smart Bypass: PID \(pid) is system daemon (\(cleanName)). Skipping user prompt.")
             } else {
@@ -470,7 +487,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Case A: Only system background daemons are locking -> Force unmount safely in < 0.1s!
         if userAppPIDs.isEmpty {
             logDebug("Only system daemons active on SSD. Executing safe automatic force-unmount...")
             _ = runCommand("/bin/sync", [])
@@ -485,7 +501,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Case B: Real user applications are open -> Prompt with native modal
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Active Applications Using SSD"
