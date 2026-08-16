@@ -6,7 +6,7 @@ import Foundation
 
 // ==============================================================================
 // SSDEjector - Native macOS SSD Management & Instant Ejector
-// Dynamic Universal Document Spillover & AutoSync-on-Connect Engine
+// Production-Hardened Engine with Atomic Concurrency & Self-Healing
 // Copyright (c) 2026 Vedant Narayan. Released under the MIT License.
 // ==============================================================================
 
@@ -76,6 +76,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var maintenanceTimer: Timer?
     private var wasAutoUnmountedForSleep = false
 
+    // Concurrency Locks
+    private let ejectLock = NSLock()
+    private var isEjecting = false
+    private let syncLock = NSLock()
+    private var isSyncing = false
+
     private var manifestPath: String {
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssdejector_spillover_manifest.json").path
     }
@@ -92,8 +98,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupCarbonF4HotKey()
         updateStatus()
 
+        // Self-Healing: Check if drive is connected or disconnected at launch
         if FileManager.default.fileExists(atPath: ssdMountPath) {
             syncAllSpilloverFolders()
+        } else {
+            handleDriveDisconnected()
         }
 
         maintenanceTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
@@ -123,8 +132,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Dynamic Universal Spillover & Auto-Sync Engine
     private func syncAllSpilloverFolders() {
+        syncLock.lock()
+        if isSyncing {
+            syncLock.unlock()
+            return
+        }
+        isSyncing = true
+        syncLock.unlock()
+
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self = self else { return }
+            defer {
+                self.syncLock.lock()
+                self.isSyncing = false
+                self.syncLock.unlock()
+            }
+
             let home = FileManager.default.homeDirectoryForCurrentUser.path
             let documentsArchive = "\(self.ssdMountPath)/Documents_Archive"
             var activeManifest: [String: String] = [:]
@@ -146,10 +169,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                             let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: localFolder)) != nil
                             if !isSymlink && isLocalDir.boolValue {
                                 logDebug("Dynamic Spillover: Found offline files in Documents/\(item). Syncing to external...")
-                                let (success, out) = self.runCommand("/usr/bin/rsync", ["-av", "--remove-source-files", "\(localFolder)/", "\(extFolder)/"])
+                                let (success, out) = self.runCommand("/usr/bin/rsync", ["-aHAX", "--remove-source-files", "\(localFolder)/", "\(extFolder)/"])
                                 if success {
                                     let count = out.components(separatedBy: "\n").filter { !$0.isEmpty && !$0.hasSuffix("/") && !$0.contains("building file list") && !$0.contains("sent ") && !$0.contains("total size") }.count
                                     totalSyncedFiles += count
+                                    // Remove empty directory hull recursively
                                     try? FileManager.default.removeItem(atPath: localFolder)
                                     try? FileManager.default.createSymbolicLink(atPath: localFolder, withDestinationPath: extFolder)
                                     logDebug("Linked Documents/\(item) -> \(extFolder)")
@@ -392,6 +416,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func handleEjectRequested() {
+        // 1. Concurrency Check
+        ejectLock.lock()
+        if isEjecting {
+            ejectLock.unlock()
+            logDebug("Eject already in progress. Skipping duplicate request.")
+            return
+        }
+        isEjecting = true
+        ejectLock.unlock()
+
+        defer {
+            ejectLock.lock()
+            isEjecting = false
+            ejectLock.unlock()
+        }
+
         if !FileManager.default.fileExists(atPath: ssdMountPath) {
             showNotification(title: "SSDEjector", subtitle: "\(ssdName) is already unmounted.")
             return
