@@ -13,7 +13,7 @@
 [![Release](https://img.shields.io/badge/Release-v8.5.0-purple?style=for-the-badge)](https://github.com/VedantNarayan/SSDEjector/releases)
 
 <p align="center">
-  <b>Double-Tap F4 to Eject</b> • <b>Dynamic M.2 Menu Bar Icon</b> • <b>Universal 3-Tier Storage Orchestrator</b> • <b>Smart System Daemon Bypass</b> • <b>Battery Sleep-Saver</b> • <b>MacBook Physical Speaker Chime</b>
+  <b>Double-Tap F4 to Eject</b> • <b>Dynamic 4K M.2 Menu Bar Icon</b> • <b>Active Data Protection Shield</b> • <b>Real-Time Sync HUD & Countdown ETA</b> • <b>Universal 3-Tier Storage</b> • <b>Battery Sleep-Saver</b> • <b>MacBook Physical Speaker Chime</b>
 </p>
 
 <br/>
@@ -28,8 +28,8 @@
 
 Managing permanently connected external SSDs (e.g., NVMe drives in USB enclosures used for expanded storage) on modern MacBooks comes with subtle friction points:
 
-1. **Slow / Stuck Ejections**: Ejecting from Finder often hangs or fails when background applications (IDEs, games, Wine, DaVinci Resolve) hold open file handles.
-2. **False Daemon Prompts**: Background macOS services (`mds_stores`, `quicklookd`, `fseventsd`) constantly trigger annoying *"Volume is in use"* popups even when no user app is open.
+1. **Data Corruption Risks**: Forcibly unmounting while background tasks (`rsync`, `cp`, `qemu-img`, `hdiutil`) are writing damages files and file systems.
+2. **False Daemon Prompts**: Background macOS indexing services (`mds_stores`, `quicklookd`, `fseventsd`) constantly trigger annoying *"Volume is in use"* popups even when no user app is open.
 3. **Overnight Sleep Battery Drain**: USB/NVMe bridge controllers do not negotiate PCIe ASPM low-power states, continuously pulling **1.5W of power all night** (~12% battery loss over 7 hours).
 4. **Audio Routing Friction**: You want audible confirmation that your drive is safe to disconnect, but if Bluetooth headphones or AirPods are connected, standard system beeps play into your pocket or case.
 5. **Sidebar Unpinning & Broken Symlinks**: Swapping symlinks on unmount causes macOS Finder to permanently drop pinned folders from your Sidebar Favorites.
@@ -46,28 +46,52 @@ graph TD
     A["Double-Tap F4 Key or Menu Bar Eject"] --> B{"Inspect Active Locks"}
     B -->|"Idle (< 0.1s)"| C["Instant Safe Eject"]
     B -->|"Only System Daemons (mds, fseventsd)"| D["Smart Bypass -> Instant Force Unmount (< 0.1s)"]
-    B -->|"User Apps Locking Files (DaVinci, Steam)"| E["Native Cocoa Modal Dialog"]
-    E -->|"Quit Apps & Eject"| F["Terminate User PIDs + Force Eject"]
-    E -->|"Force Eject"| G["Force Unmount Drive"]
-    E -->|"Cancel"| H["Abort Eject"]
-    C --> I["CoreAudio Hardware Speaker Override"]
-    D --> I
-    F --> I
-    G --> I
-    I --> J["Play 100% Glass Chime on MacBook Laptop Speakers"]
-    J --> K["Instantly Restore Previous Audio Device & Volume"]
+    B -->|"Critical Data Sync in Progress (rsync, cp)"| E["Active Data Protection Shield"]
+    E --> E1["🚫 Force Eject Disabled (Zero Corruption)"]
+    E --> E2["Dynamic Progress Bar + Live Countdown ETA"]
+    E --> E3["Option 1: ⏳ Auto-Eject When Done"]
+    E --> E4["Option 2: 🛑 Safely Stop Sync & Eject"]
+    B -->|"User Apps Locking Files (DaVinci, Steam)"| F["Native Cocoa Modal Dialog"]
+    F -->|"Quit Apps & Eject"| G["Terminate User PIDs + Force Eject"]
+    F -->|"Force Eject"| H["Force Unmount Drive"]
+    F -->|"Cancel"| I["Abort Eject"]
+    C --> J["CoreAudio Hardware Speaker Override"]
+    D --> J
+    E3 --> J
+    E4 --> J
+    G --> J
+    H --> J
+    J --> K["Play 100% Glass Chime on MacBook Laptop Speakers"]
+    K --> L["Instantly Restore Previous Audio Device & Volume"]
 ```
 
 ---
 
 ### 1. 🖥️ Dynamic 4K M.2 SSD Menu Bar Status Item
 * **Connected / Mounted**: Displays the **full-color 4K 3D M.2 NVMe SSD stick** with gold contacts, NAND flash chips, and glowing emerald status LED.
-* **Ejected / Disconnected**: Automatically transitions to a **high-contrast monochrome slate M.2 SSD stick**.
-* **100% Crystal-Clear Alpha**: Pure transparent background with zero smoky halos across all macOS wallpapers and translucent menu bars.
+* **Ejected / Disconnected**: Automatically transitions to a **translucent monochrome ghost M.2 blade**, matching native macOS inactive indicators.
+* **100% Crystal-Clear Alpha**: Pure transparent cutout with zero smoky halos across all macOS wallpapers and translucent menu bars.
 
 ---
 
-### 2. 📁 Universal 3-Tier Storage Orchestrator (`⌘F`)
+### 2. 🛡️ Active Data Protection Shield (Zero Corruption Guarantee)
+* **Intelligent Write Interception**: If an active background file synchronization or disk-write task (`rsync`, `cp`, `mv`, `tar`, `qemu-img`, `hdiutil`) is copying data, SSDEjector immediately intercepts the ejection.
+* **🚫 Force Eject is DISABLED**: To prevent permanent data corruption and broken file systems, force eject is strictly disabled during active transfers.
+* **Visual Card UI with Live Countdown ETA**:
+  * Displays a clean, modern card modal with active folder info, transfer speed (`~35 MB/s`), and a determinate progress bar.
+  * **`⏳ Auto-Eject When Done`**: Tracks transfer progress and automatically safely unmounts the volume the exact millisecond writing finishes.
+  * **`🛑 Safely Stop Sync & Eject`**: Gracefully terminates the sync process (`SIGTERM`), flushes all cached buffers (`sync`), and unmounts cleanly without corruption.
+
+---
+
+### 3. 📊 Real-Time Streaming Sync HUD in Menu Bar
+* When background sync is active, the Menu Bar dynamically displays live status and countdown:
+  `🔄 Documents (65% • ~15s)`
+* Directly driven by an **Asynchronous Live Stream Parser** (`rsync --progress`).
+
+---
+
+### 4. 📁 Universal 3-Tier Storage Orchestrator (`⌘F`)
 Click **`📁 Manage Synced Folders...`** in the menu bar to track and sync **any folder on your Mac** with 3 configurable storage tiers:
 
 | Tier | Storage Mode | Internal Mac Storage | Offline Behavior (No SSD) | On Reconnection | Best Used For |
@@ -78,44 +102,34 @@ Click **`📁 Manage Synced Folders...`** in the menu bar to track and sync **an
 
 ---
 
-### 3. ⚡ Instant Double-Tap F4 Hardware Key Ejection
+### 5. ⚡ Instant Double-Tap F4 Hardware Key Ejection
 * Double-tap your physical **F4 / Spotlight key** to safely unmount your external SSD in **< 0.1 seconds**.
 * Powered by **Carbon Global Hotkeys** (`RegisterEventHotKey`) — **Zero Accessibility / TCC permissions required**.
 * Built-in **hardware debouncing (80ms – 550ms)** prevents electrical key bounce from causing accidental triggers.
 
 ---
 
-### 🛡️ Active Data Protection Shield (Zero Corruption Guarantee)
-* **Intelligent Write Interception**: If an active background file synchronization or disk-write task (, , , , , ) is in progress, SSDEjector immediately intercepts the ejection.
-* **🚫 Force Eject is DISABLED**: To prevent permanent data corruption and broken file systems, force eject is strictly disabled during active transfers.
-* **High-Severity Warning Modal**: Displays a high-contrast critical warning dialog with two safe options:
-  1. ****: Lets the transfer complete cleanly.
-  2. ****: Gracefully terminates the sync process (), flushes all cached buffers (), and unmounts cleanly without corruption.
-
----
-
-### 4. 🛡️ Smart System Daemon Bypass (v4.5+)
+### 6. 🛡️ Smart System Daemon Bypass
 * Automatically detects when only read-only macOS background services (`mds`, `mds_stores`, `mdworker`, `fseventsd`, `quicklookd`, `diskarbitrationd`) are touching the drive.
 * Bypasses user prompts, flushes disk buffers (`sync`), and force-ejects in **< 0.1s** without annoying modals.
-* Real user applications (DaVinci Resolve, Steam, CrossOver, PyCharm) still display the native Cocoa modal.
 
 ---
 
-### 5. 🔋 Battery Sleep-Saver (Eliminates Overnight Drain)
+### 7. 🔋 Battery Sleep-Saver (Eliminates Overnight Drain)
 * **Auto-Unmount on Sleep**: When your MacBook lid closes or the system goes to sleep (`NSWorkspace.willSleepNotification`), SSDEjector automatically flushes buffers (`sync`) and unmounts the volume.
 * **Low-Power USB Mode**: macOS drops USB power draw from **1.5W down to ~0.05W** (saving 10–12% battery overnight).
 * **Silent Auto-Remount on Wake**: The moment you open the laptop lid (`NSWorkspace.didWakeNotification`), the drive silently remounts in **~0.1 seconds**.
 
 ---
 
-### 6. 🔊 CoreAudio Built-in Speaker Hardware Override
+### 8. 🔊 CoreAudio Built-in Speaker Hardware Override
 * Uses low-level **CoreAudio HAL APIs** (`kAudioDeviceTransportTypeBuiltIn`) to route the ejection confirmation chime directly to your **physical MacBook Air/Pro laptop speakers at 100% volume**.
 * Even if **Bluetooth earphones (AirPods, Galaxy Buds, Sony WH-1000XM), HDMI monitors, or external DACs** are connected, you will always hear the chime loud and clear from the laptop.
 * Seamlessly restores your previous audio device and volume level the instant the chime finishes (~0.85s).
 
 ---
 
-### 7. 📌 Persistent Finder Sidebar Bookmark Architecture
+### 9. 📌 Persistent Finder Sidebar Bookmark Architecture
 * Eliminates destructive directory removal on unmount/remount.
 * Preserves permanent file inodes so macOS Finder **never purges pinned folders from your Sidebar Favorites**.
 
@@ -124,7 +138,7 @@ Click **`📁 Manage Synced Folders...`** in the menu bar to track and sync **an
 ## 🚀 Installation
 
 ### Option 1: Download Pre-built DMG (Recommended)
-1. Download the latest `SSDEjector-v4.0.0-macOS.dmg` from [Releases](https://github.com/VedantNarayan/SSDEjector/releases).
+1. Download [**`SSDEjector-v8.5.0-macOS.dmg`**](https://github.com/VedantNarayan/SSDEjector/releases/tag/v8.5.0).
 2. Open the DMG and double-click **`Install.command`** (or drag `SSDEjector.app` to Applications).
 
 ### Option 2: 1-Line Terminal Install
@@ -166,12 +180,13 @@ cd SSDEjector
 | Component | Technology | Purpose |
 | :--- | :--- | :--- |
 | **Hotkey Engine** | Carbon Event API (`kVK_F4`) | Zero-permission global double-tap hotkey listener |
+| **Data Protection Shield** | Real-time `fuser` + Live Stream Reader | Write interception + force-eject lockout during transfers |
+| **Live Progress HUD** | Async BSD `rsync --progress` Pipe | Real-time percentage, MB/s speed, and countdown ETA |
 | **Audio Routing** | CoreAudio HAL (`AudioObjectGetPropertyData`) | Physical hardware speaker output override |
 | **Power Management** | `NSWorkspace.notificationCenter` | Sleep auto-unmount & wake auto-remount |
 | **Storage Orchestrator** | `rsync` + JSON Manifest (`.ssdejector_folders.json`) | 3-Tier Multi-Directory auto-sync & space reclamation |
-| **Lock Detection** | Kernel `fuser` + Regex PID Parser | Real-time active file descriptor inspection |
 | **Process Bypass** | System Daemon Filter Set | Silent auto-eject for `mds_stores`, `quicklookd`, `fseventsd` |
-| **Dynamic HUD** | Cocoa `NSStatusItem` + 4K Retina Assets | Real-time M.2 SSD connected/disconnected visual state |
+| **Dynamic HUD** | Cocoa `NSStatusItem` + 4K Retina Assets | Real-time M.2 SSD connected/ghost visual states |
 | **Background Supervisor** | macOS `launchd` LaunchAgent | Automatic login launch & instant crash recovery |
 
 ---

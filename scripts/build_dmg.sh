@@ -2,16 +2,14 @@
 set -e
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="4.0.0"
+VERSION="8.5.0"
 DMG_NAME="SSDEjector-v${VERSION}-macOS.dmg"
 DIST_DIR="${PROJECT_ROOT}/dist"
 BUILD_DIR="${PROJECT_ROOT}/build"
 DMG_STAGING="${BUILD_DIR}/dmg_staging"
 
-# 1. Build app if needed
-if [ ! -d "${BUILD_DIR}/SSDEjector.app" ]; then
-    "${PROJECT_ROOT}/scripts/build.sh"
-fi
+# 1. Build app
+"${PROJECT_ROOT}/scripts/build.sh"
 
 echo "📦 Packaging DMG: ${DMG_NAME}..."
 
