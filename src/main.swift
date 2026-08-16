@@ -6,7 +6,7 @@ import Foundation
 
 // ==============================================================================
 // SSDEjector - Native macOS SSD Management & Universal Storage Orchestrator
-// Active Data Protection Shield & High-Severity Colored Sync Warning Engine
+// Real-Time Dynamic Menu Bar Sync Progress HUD & Auto-Eject on Completion
 // Copyright (c) 2026 Vedant Narayan. Released under the MIT License.
 // ==============================================================================
 
@@ -99,6 +99,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var isEjecting = false
     private let syncLock = NSLock()
     private var isSyncing = false
+    private var pendingEjectOnSyncComplete = false
+    private var currentSyncStatusString = ""
 
     private var configURL: URL {
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssdejector_folders.json")
@@ -107,7 +109,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         gAppDelegate = self
         loadConfiguration()
-        logDebug("SSDEjector 8.0 (Active Data Protection Shield) initialized.")
+        logDebug("SSDEjector 8.1 (Dynamic Menu Bar HUD & Auto-Eject Engine) initialized.")
 
         applyHidutilMapping()
         loadIcons()
@@ -198,7 +200,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - 3-Tier Multi-Directory Storage Engine
+    // MARK: - 3-Tier Multi-Directory Storage Engine with Real-Time HUD
     func syncAllTrackedFolders() {
         syncLock.lock()
         if isSyncing {
@@ -213,17 +215,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             defer {
                 self.syncLock.lock()
                 self.isSyncing = false
+                let shouldAutoEject = self.pendingEjectOnSyncComplete
+                self.pendingEjectOnSyncComplete = false
                 self.syncLock.unlock()
+
+                DispatchQueue.main.async {
+                    self.currentSyncStatusString = ""
+                    self.updateStatus()
+
+                    if shouldAutoEject {
+                        logDebug("Auto-eject triggered after sync completion.")
+                        self.showNotification(title: "⚡ Sync Complete", subtitle: "All files synchronized safely. Ejecting \(self.ssdName)...")
+                        self.handleEjectRequested()
+                    }
+                }
             }
 
             guard FileManager.default.fileExists(atPath: self.ssdMountPath) else { return }
             let folders = self.getTrackedFolders()
+            let totalFolders = folders.count
             var totalSyncedFiles = 0
 
-            for item in folders {
+            for (idx, item) in folders.enumerated() {
                 let localPath = (item.localPath as NSString).expandingTildeInPath
                 let folderName = (localPath as NSString).lastPathComponent
                 let remotePath = "\(self.ssdMountPath)/Documents_Archive/\(folderName)"
+
+                DispatchQueue.main.async {
+                    self.currentSyncStatusString = " 🔄 Syncing \(idx + 1)/\(totalFolders): \(folderName)"
+                    self.updateStatus()
+                }
 
                 _ = self.runCommand("/bin/mkdir", ["-p", remotePath])
 
@@ -500,10 +521,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             detectVolumeUUID()
         }
         if let button = statusItem.button {
-            button.title = ""
             button.image = isMounted ? connectedIcon : disconnectedIcon
             button.imageScaling = .scaleProportionallyUpOrDown
-            button.imagePosition = .imageOnly
+            
+            // Dynamic Live Progress Text next to M.2 Icon
+            if !currentSyncStatusString.isEmpty {
+                button.title = currentSyncStatusString
+                button.imagePosition = .imageLeft
+            } else {
+                button.title = ""
+                button.imagePosition = .imageOnly
+            }
         }
         rebuildMenu(isMounted: isMounted)
     }
@@ -516,6 +544,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let infoItem = NSMenuItem(title: "💾 \(ssdName): \(spaceInfo)", action: nil, keyEquivalent: "")
             infoItem.isEnabled = false
             menu.addItem(infoItem)
+
+            if isSyncing {
+                let syncItem = NSMenuItem(title: "🔄 Sync in Progress...", action: nil, keyEquivalent: "")
+                syncItem.isEnabled = false
+                menu.addItem(syncItem)
+            }
 
             menu.addItem(NSMenuItem.separator())
 
@@ -607,7 +641,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         handleEjectRequested()
     }
 
-    // MARK: - Smart Eject with Active Data Protection Shield
+    // MARK: - Smart Eject with Active Data Protection Shield & Dynamic Progress
     func handleEjectRequested() {
         ejectLock.lock()
         if isEjecting {
@@ -655,7 +689,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 logDebug("Smart Bypass: PID \(pid) is system daemon (\(cleanName)). Skipping user prompt.")
             } else if criticalSyncDaemons.contains(cleanName) || criticalSyncDaemons.contains(baseName) {
                 criticalSyncPIDs.append(pid)
-                criticalSyncDescriptions.append("• \(cleanName) (PID: \(pid)) — [Active Data Protection / File Sync]")
+                criticalSyncDescriptions.append("• \(cleanName) (PID: \(pid)) — [Active File Sync / Write Task]")
             } else {
                 regularUserAppPIDs.append(pid)
                 regularUserAppDescriptions.append("• \(cleanName) (PID: \(pid))")
@@ -693,22 +727,43 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             🚫 Force Eject is DISABLED to prevent data corruption or permanent file loss.
 
-            How would you like to proceed?
+            Select 'Auto-Eject When Sync Completes' and SSDEjector will dynamically show progress in your Menu Bar and safely eject the moment writing finishes!
             """
             alert.alertStyle = .critical
 
-            // Primary Safe Action
-            alert.addButton(withTitle: "⏳ Wait for Sync to Finish (Recommended)")
-            alert.addButton(withTitle: "🛑 Safely Stop Sync & Eject")
+            // Custom Accessory View with Live Progress Bar
+            let accessoryView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 44))
+            let progressIndicator = NSProgressIndicator(frame: NSRect(x: 0, y: 22, width: 320, height: 16))
+            progressIndicator.isIndeterminate = true
+            progressIndicator.startAnimation(nil)
+            accessoryView.addSubview(progressIndicator)
+
+            let statusLabel = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 18))
+            statusLabel.stringValue = "🔄 Writing files to external drive in background..."
+            statusLabel.isEditable = false
+            statusLabel.isBordered = false
+            statusLabel.backgroundColor = .clear
+            statusLabel.textColor = .secondaryLabelColor
+            statusLabel.font = NSFont.systemFont(ofSize: 11)
+            accessoryView.addSubview(statusLabel)
+
+            alert.accessoryView = accessoryView
+
+            alert.addButton(withTitle: "⏳ Auto-Eject When Sync Completes (Recommended)")
+            alert.addButton(withTitle: "🛑 Safely Stop Sync & Eject Immediately")
 
             let response = alert.runModal()
 
             if response == .alertFirstButtonReturn {
-                logDebug("User chose to wait for sync to finish.")
-                showNotification(title: "Sync in Progress", subtitle: "Waiting for background transfer to finish. Eject when ready.")
+                logDebug("User chose Auto-Eject When Sync Completes.")
+                syncLock.lock()
+                self.pendingEjectOnSyncComplete = true
+                syncLock.unlock()
+                
+                showNotification(title: "⏳ Auto-Eject Armed", subtitle: "Monitoring progress in Menu Bar. Drive will safely eject automatically when done.")
                 return
             } else if response == .alertSecondButtonReturn {
-                logDebug("User chose to Safely Stop Sync & Eject. Sending SIGTERM to \(criticalSyncPIDs)...")
+                logDebug("User chose Safely Stop Sync & Eject Immediately.")
                 for pid in criticalSyncPIDs {
                     _ = runCommand("/bin/kill", ["-15", pid])
                 }
