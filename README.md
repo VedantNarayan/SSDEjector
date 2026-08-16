@@ -8,10 +8,10 @@
 [![Architecture](https://img.shields.io/badge/Architecture-Apple%20Silicon%20(M1%2FM2%2FM3%2FM4)%20%26%20Intel-blue?style=for-the-badge&logo=apple)](https://apple.com)
 [![Swift](https://img.shields.io/badge/Language-Swift%206.0-orange?style=for-the-badge&logo=swift)](https://swift.org)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v4.0.0-purple?style=for-the-badge)](https://github.com/VedantNarayan/SSDEjector/releases)
+[![Release](https://img.shields.io/badge/Release-v4.2.0-purple?style=for-the-badge)](https://github.com/VedantNarayan/SSDEjector/releases)
 
 <p align="center">
-  <b>Double-Tap F4 to Eject</b> • <b>Battery Sleep-Saver</b> • <b>100% Volume Built-in Speaker Chime</b> • <b>Native Modal Lock Inspector</b> • <b>Ultra-Compact Menu Bar HUD</b>
+  <b>Double-Tap F4 to Eject</b> • <b>Battery Sleep-Saver</b> • <b>100% Volume Built-in Speaker Chime</b> • <b>Native Modal Lock Inspector</b> • <b>Universal Document Spillover & AutoSync</b>
 </p>
 
 </div>
@@ -26,26 +26,27 @@ Managing permanently connected external SSDs (e.g., NVMe drives in USB enclosure
 2. **Overnight Sleep Battery Drain**: USB 2.0 / NVMe bridge controllers do not negotiate PCIe ASPM low-power states, continuously pulling **1.5W of power all night** (~12% battery loss over 7 hours).
 3. **Audio Routing Friction**: You want an audible confirmation that your drive is safe to disconnect, but if Bluetooth headphones or AirPods are connected, standard system beeps are muffled in your pocket/case.
 4. **Accessibility Permission Friction**: Traditional hotkey utilities require intrusive TCC Accessibility permissions and repeatedly break after macOS updates.
+5. **Offline File Spillover**: When the SSD is disconnected, folders pointing to external storage break unless seamlessly converted to local storage and auto-synced upon reconnection.
 
 **SSDEjector solves all of these problems natively in Swift with zero third-party dependencies.**
 
 ---
 
-## ✨ Features
+## ✨ Features & Architecture
 
 ```mermaid
 graph TD
-    A[Double-Tap F4 Key] --> B{Is SSD Busy?}
-    B -->|Idle (< 0.1s)| C[Instant Safe Eject]
-    B -->|Apps Holding Files| D[Native NSAlert Dialog]
-    D -->|Quit Apps & Eject| E[Kill PIDs + Force Eject]
-    D -->|Force Eject| F[Force Unmount]
-    D -->|Cancel| G[Abort]
-    C --> H[CoreAudio Physical Speaker Override]
+    A["Double-Tap F4 Key"] --> B{"Is SSD Busy?"}
+    B -->|"Idle (< 0.1s)"| C["Instant Safe Eject"]
+    B -->|"Apps Holding Files"| D["Native NSAlert Dialog"]
+    D -->|"Quit Apps & Eject"| E["Kill PIDs + Force Eject"]
+    D -->|"Force Eject"| F["Force Unmount"]
+    D -->|"Cancel"| G["Abort"]
+    C --> H["CoreAudio Physical Speaker Override"]
     E --> H
     F --> H
-    H --> I[Play 100% Glass Chime on MacBook Speakers]
-    I --> J[Instantly Restore Previous Bluetooth Audio & Volume]
+    H --> I["Play 100% Glass Chime on MacBook Speakers"]
+    I --> J["Instantly Restore Previous Bluetooth Audio & Volume"]
 ```
 
 ### 1. ⚡ Instant Double-Tap F4 Ejection
@@ -58,17 +59,22 @@ graph TD
 * **Low-Power USB Mode**: macOS puts the USB port into deep hardware suspend, dropping power draw from **1.5W down to ~0.05W** (saving 10–12% battery overnight).
 * **Silent Auto-Remount on Wake**: The moment you open the laptop lid (`NSWorkspace.didWakeNotification`), the drive silently remounts in **~0.1 seconds**.
 
-### 3. 🔊 CoreAudio Built-in Speaker Hardware Override
+### 3. 🔄 Universal Document Spillover & AutoSync
+* **Dynamic Folder Discovery**: Automatically tracks all document archive directories (`Screenshots`, project folders, archives) on your external SSD.
+* **Offline Working**: When the SSD is unplugged, folders seamlessly revert to local storage so you can save screenshots and create files offline with **zero broken link errors**.
+* **Automatic Reconnect Migration**: The moment the SSD is plugged back in, offline files are moved to the external drive and transparent symlinks are restored, freeing up internal Mac storage automatically.
+
+### 4. 🔊 CoreAudio Built-in Speaker Hardware Override
 * Uses low-level **CoreAudio HAL APIs** (`kAudioDeviceTransportTypeBuiltIn`) to route the ejection confirmation chime directly to your **physical MacBook Air/Pro laptop speakers at 100% volume**.
 * Even if **Bluetooth earphones (AirPods, OnePlus Nord Buds, Sony WH-1000XM), HDMI monitors, or external DACs** are connected, you will always hear the chime loud and clear from the laptop.
 * Seamlessly restores your previous audio device and volume level the instant the chime finishes (~0.85s).
 
-### 4. 🛑 Native Modal Lock Inspector (`NSAlert`)
+### 5. 🛑 Native Modal Lock Inspector (`NSAlert`)
 * If an application (CrossOver, Steam, DaVinci Resolve, PyCharm, or Wine) is locking files, a native Cocoa dialog pops up right in front of your active screen.
 * Cleanly parses Windows paths (`Z:\...`), backslashes, and POSIX handles.
 * Offers **[Quit Apps & Eject]**, **[Force Eject]**, and **[Cancel]**.
 
-### 5. 🖥️ Minimal Menu Bar Status HUD
+### 6. 🖥️ Minimal Menu Bar Status HUD
 * Ultra-compact single indicator dot (**`🟢`** when mounted / **`⚪`** when ejected) taking only **~14px** of horizontal space.
 * Dropdown menu includes storage capacity info, **`⚡ Mount SSD Now`** toggle, and active lock inspector.
 
@@ -122,6 +128,7 @@ cd SSDEjector
 | **Hotkey Listener** | Carbon Event API (`kVK_F4`) | Zero-permission global hotkey registration |
 | **Audio Routing** | CoreAudio HAL (`AudioObjectGetPropertyData`) | Physical hardware speaker output override |
 | **Power Management** | `NSWorkspace.notificationCenter` | Sleep auto-unmount & wake auto-remount |
+| **Spillover Engine** | `rsync` + JSON Manifest | Offline local storage & reconnect auto-sync |
 | **Lock Detection** | Kernel `fuser` + Regex PID Parser | Real-time active file descriptor inspection |
 | **Background Supervisor** | macOS `launchd` LaunchAgent | Automatic login launch & instant crash recovery |
 
