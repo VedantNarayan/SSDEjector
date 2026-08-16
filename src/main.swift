@@ -6,7 +6,7 @@ import Foundation
 
 // ==============================================================================
 // SSDEjector - Native macOS SSD Management & Universal Storage Orchestrator
-// Visual Modern Card UI with Live ETA & Dynamic Menu Bar HUD
+// Real-Time Live Streaming Sync HUD & Modal Progress Engine
 // Copyright (c) 2026 Vedant Narayan. Released under the MIT License.
 // ==============================================================================
 
@@ -102,6 +102,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingEjectOnSyncComplete = false
     private var currentSyncStatusString = ""
 
+    // Live Modal UI References for Real-Time Updates
+    private weak var liveProgressIndicator: NSProgressIndicator?
+    private weak var liveStatsLabel: NSTextField?
+    private weak var liveTaskLabel: NSTextField?
+    private weak var liveAutoEjectButton: NSButton?
+
     private var configURL: URL {
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssdejector_folders.json")
     }
@@ -109,7 +115,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         gAppDelegate = self
         loadConfiguration()
-        logDebug("SSDEjector 8.2 (Visual Card UI with Live ETA) initialized.")
+        logDebug("SSDEjector 8.3 (Real-Time Live Progress Engine) initialized.")
 
         applyHidutilMapping()
         loadIcons()
@@ -200,41 +206,78 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Live ETA Calculation Helper
-    private func getFolderSyncStats(localPath: String, remotePath: String) -> (percentage: Double, progressInfo: String, etaString: String) {
-        let fm = FileManager.default
+    // MARK: - Real-Time Live Rsync Execution with Streaming Updates
+    private func runRsyncWithLiveProgress(localPath: String, remotePath: String, folderName: String) -> Bool {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/rsync")
+        // Use --info=progress2 for total progress calculation
+        proc.arguments = ["-av", "--info=progress2", "\(localPath)/", "\(remotePath)/"]
 
-        func quickSize(_ path: String) -> Int64 {
-            guard let enumerator = fm.enumerator(at: URL(fileURLWithPath: path), includingPropertiesForKeys: [.fileSizeKey], options: [.skipsHiddenFiles]) else { return 0 }
-            var size: Int64 = 0
-            for case let fileURL as URL in enumerator {
-                let res = try? fileURL.resourceValues(forKeys: [.fileSizeKey])
-                size += Int64(res?.fileSize ?? 0)
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = pipe
+
+        let regexPattern = #"^\s*([0-9,]+)\s+([0-9]+)%\s+([0-9.]+[A-Za-z/]+)\s+([0-9:]+)"#
+        let regex = try? NSRegularExpression(pattern: regexPattern)
+
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let str = String(data: data, encoding: .utf8) else { return }
+
+            let lines = str.components(separatedBy: "\r")
+            for line in lines {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+
+                let range = NSRange(trimmed.startIndex..., in: trimmed)
+                if let match = regex?.firstMatch(in: trimmed, range: range) {
+                    if let rPct = Range(match.range(at: 2), in: trimmed),
+                       let rSpeed = Range(match.range(at: 3), in: trimmed),
+                       let rEta = Range(match.range(at: 4), in: trimmed) {
+
+                        let pctInt = Int(trimmed[rPct]) ?? 0
+                        let speedStr = String(trimmed[rSpeed])
+                        let etaRaw = String(trimmed[rEta])
+                        let pctDouble = Double(pctInt) / 100.0
+
+                        DispatchQueue.main.async {
+                            guard let self = self else { return }
+
+                            // 1. Update Menu Bar
+                            self.currentSyncStatusString = " 🔄 \(folderName) (\(pctInt)% • ~\(etaRaw))"
+                            self.updateStatus()
+
+                            // 2. Update Live Modal UI
+                            if let indicator = self.liveProgressIndicator {
+                                indicator.isIndeterminate = false
+                                indicator.doubleValue = pctDouble
+                            }
+                            if let sLabel = self.liveStatsLabel {
+                                sLabel.stringValue = "📊 Progress: \(pctInt)%  •  ⏳ ~\(etaRaw) remaining"
+                            }
+                            if let tLabel = self.liveTaskLabel {
+                                tLabel.stringValue = "📁 Syncing: \(folderName)  •  ⚡ \(speedStr)"
+                            }
+                            if let btn = self.liveAutoEjectButton {
+                                btn.title = "⏳ Auto-Eject When Done (~\(etaRaw))"
+                            }
+                        }
+                    }
+                }
             }
-            return size
         }
 
-        let localSize = quickSize(localPath)
-        let remoteSize = quickSize(remotePath)
-
-        if localSize <= 0 { return (1.0, "Complete", "0s") }
-
-        let pct = min(1.0, max(0.0, Double(remoteSize) / Double(localSize)))
-        let remainingBytes = max(0, localSize - remoteSize)
-
-        let speedBytesPerSec: Double = 35_000_000 // Real-world USB 2.0 transfer speed ~35 MB/s
-        let remainingSec = Int(Double(remainingBytes) / speedBytesPerSec)
-
-        let etaStr = remainingSec < 60 ? "\(max(remainingSec, 5))s" : "\(remainingSec / 60)m \(remainingSec % 60)s"
-        let pctInt = Int(pct * 100)
-
-        let localMB = String(format: "%.1f MB", Double(localSize) / 1_000_000.0)
-        let remoteMB = String(format: "%.1f MB", Double(remoteSize) / 1_000_000.0)
-
-        return (pct, "\(remoteMB) of \(localMB) (\(pctInt)%)", etaStr)
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            pipe.fileHandleForReading.readabilityHandler = nil
+            return proc.terminationStatus == 0
+        } catch {
+            return false
+        }
     }
 
-    // MARK: - 3-Tier Multi-Directory Storage Engine with Real-Time ETA HUD
+    // MARK: - 3-Tier Multi-Directory Storage Engine
     func syncAllTrackedFolders() {
         syncLock.lock()
         if isSyncing {
@@ -267,9 +310,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             guard FileManager.default.fileExists(atPath: self.ssdMountPath) else { return }
             let folders = self.getTrackedFolders()
-            var totalSyncedFiles = 0
 
-            for (_, item) in folders.enumerated() {
+            for item in folders {
                 let localPath = (item.localPath as NSString).expandingTildeInPath
                 let folderName = (localPath as NSString).lastPathComponent
                 let remotePath = "\(self.ssdMountPath)/Documents_Archive/\(folderName)"
@@ -278,31 +320,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
                 if item.mode == "mirror" {
                     if FileManager.default.fileExists(atPath: localPath) {
-                        // Calculate live ETA for menu bar
-                        let stats = self.getFolderSyncStats(localPath: localPath, remotePath: remotePath)
-                        DispatchQueue.main.async {
-                            self.currentSyncStatusString = " 🔄 \(folderName) (\(Int(stats.percentage * 100))% • ~\(stats.etaString))"
-                            self.updateStatus()
-                        }
-
-                        let (success, out) = self.runCommand("/usr/bin/rsync", ["-av", "\(localPath)/", "\(remotePath)/"])
-                        if success {
-                            let count = out.components(separatedBy: "\n").filter { !$0.isEmpty && !$0.hasSuffix("/") && !$0.contains("building file list") && !$0.contains("sent ") && !$0.contains("total size") && !$0.contains("Transfer starting:") }.count
-                            totalSyncedFiles += count
-                        }
+                        _ = self.runRsyncWithLiveProgress(localPath: localPath, remotePath: remotePath, folderName: folderName)
                     }
                 } else if item.mode == "spillover" {
                     let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: localPath)) != nil
                     if !isSymlink {
                         var isDir: ObjCBool = false
                         if FileManager.default.fileExists(atPath: localPath, isDirectory: &isDir) && isDir.boolValue {
-                            let (success, out) = self.runCommand("/usr/bin/rsync", ["-av", "--remove-source-files", "\(localPath)/", "\(remotePath)/"])
-                            if success {
-                                let count = out.components(separatedBy: "\n").filter { !$0.isEmpty && !$0.hasSuffix("/") && !$0.contains("building file list") && !$0.contains("sent ") && !$0.contains("total size") && !$0.contains("Transfer starting:") }.count
-                                totalSyncedFiles += count
-                                _ = self.runCommand("/bin/rm", ["-rf", localPath])
-                                _ = self.runCommand("/bin/ln", ["-s", remotePath, localPath])
-                            }
+                            _ = self.runRsyncWithLiveProgress(localPath: localPath, remotePath: remotePath, folderName: folderName)
+                            _ = self.runCommand("/bin/rm", ["-rf", localPath])
+                            _ = self.runCommand("/bin/ln", ["-s", remotePath, localPath])
                         }
                     }
                 } else if item.mode == "offload" {
@@ -315,12 +342,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         }
                         _ = self.runCommand("/bin/ln", ["-s", remotePath, localPath])
                     }
-                }
-            }
-
-            if totalSyncedFiles > 0 {
-                DispatchQueue.main.async {
-                    self.showNotification(title: "⚡ Storage Synchronized", subtitle: "Synced \(totalSyncedFiles) updated file(s) across your folders to \(self.ssdName).")
                 }
             }
         }
@@ -675,7 +696,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         handleEjectRequested()
     }
 
-    // MARK: - Smart Eject with Visual Card UI & Live Progress
+    // MARK: - Smart Eject with Active Data Protection Shield & Dynamic Progress
     func handleEjectRequested() {
         ejectLock.lock()
         if isEjecting {
@@ -745,14 +766,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
 
-        // SCENARIO 2: VISUAL CARD UI FOR CRITICAL DATA PROTECTION (Clean, Modern, Not Text-Heavy)
+        // SCENARIO 2: VISUAL CARD UI FOR CRITICAL DATA PROTECTION (LIVE REAL-TIME STREAMING)
         if !criticalSyncPIDs.isEmpty {
-            logDebug("Critical data sync active (\(criticalSyncPIDs)). Displaying Modern Visual Card Dialog...")
-
-            // Calculate live sync stats for the active folder
-            let localDocs = "\(FileManager.default.homeDirectoryForCurrentUser.path)/Documents"
-            let remoteDocs = "\(ssdMountPath)/Documents_Archive/Documents"
-            let stats = getFolderSyncStats(localPath: localDocs, remotePath: remoteDocs)
+            logDebug("Critical data sync active (\(criticalSyncPIDs)). Displaying Real-Time Live Visual Card...")
 
             let alert = NSAlert()
             alert.messageText = "🛡️ Active Data Sync in Progress"
@@ -762,7 +778,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Clean Visual Card Container
             let cardView = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 95))
 
-            // 1. Task info label with icon
             let taskLabel = NSTextField(frame: NSRect(x: 4, y: 70, width: 332, height: 20))
             taskLabel.stringValue = "📁 Syncing: Documents  •  ⚡ ~35 MB/s"
             taskLabel.isEditable = false
@@ -770,26 +785,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             taskLabel.backgroundColor = .clear
             taskLabel.font = NSFont.boldSystemFont(ofSize: 12)
             cardView.addSubview(taskLabel)
+            self.liveTaskLabel = taskLabel
 
-            // 2. Determinate Progress Bar
             let progressIndicator = NSProgressIndicator(frame: NSRect(x: 4, y: 46, width: 332, height: 16))
             progressIndicator.isIndeterminate = false
             progressIndicator.minValue = 0.0
             progressIndicator.maxValue = 1.0
-            progressIndicator.doubleValue = stats.percentage
+            progressIndicator.doubleValue = 0.25
             cardView.addSubview(progressIndicator)
+            self.liveProgressIndicator = progressIndicator
 
-            // 3. Stats & Live ETA
             let statsLabel = NSTextField(frame: NSRect(x: 4, y: 22, width: 332, height: 18))
-            statsLabel.stringValue = "📊 \(stats.progressInfo)   •   ⏳ ~\(stats.etaString) remaining"
+            statsLabel.stringValue = "📊 Live transfer in progress  •  ⏳ Calculating..."
             statsLabel.isEditable = false
             statsLabel.isBordered = false
             statsLabel.backgroundColor = .clear
             statsLabel.textColor = .secondaryLabelColor
             statsLabel.font = NSFont.systemFont(ofSize: 11)
             cardView.addSubview(statsLabel)
+            self.liveStatsLabel = statsLabel
 
-            // 4. Safe Auto-Eject Badge
             let badgeLabel = NSTextField(frame: NSRect(x: 4, y: 0, width: 332, height: 18))
             badgeLabel.stringValue = "🔒 Safe Auto-Eject will unmount drive automatically when done."
             badgeLabel.isEditable = false
@@ -801,18 +816,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             alert.accessoryView = cardView
 
-            alert.addButton(withTitle: "⏳ Auto-Eject When Done (~\(stats.etaString))")
+            alert.addButton(withTitle: "⏳ Auto-Eject When Done")
             alert.addButton(withTitle: "🛑 Stop & Eject Now")
             alert.addButton(withTitle: "Cancel")
 
+            if let btn = alert.buttons.first {
+                self.liveAutoEjectButton = btn
+            }
+
             let response = alert.runModal()
+
+            // Clear live references
+            self.liveTaskLabel = nil
+            self.liveProgressIndicator = nil
+            self.liveStatsLabel = nil
+            self.liveAutoEjectButton = nil
 
             if response == .alertFirstButtonReturn {
                 logDebug("User chose Auto-Eject When Done.")
                 syncLock.lock()
                 self.pendingEjectOnSyncComplete = true
                 syncLock.unlock()
-                showNotification(title: "⏳ Auto-Eject Armed", subtitle: "SSDEjector will automatically eject \(ssdName) in ~\(stats.etaString).")
+                showNotification(title: "⏳ Auto-Eject Armed", subtitle: "SSDEjector will automatically eject \(ssdName) as soon as transfer finishes.")
                 return
             } else if response == .alertSecondButtonReturn {
                 logDebug("User chose Stop & Eject Now.")
