@@ -129,20 +129,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let resPath = Bundle.main.resourcePath ?? ""
         let assetsPath = "\(FileManager.default.homeDirectoryForCurrentUser.path)/SSDEjector/assets"
 
-        let connPath = FileManager.default.fileExists(atPath: "\(resPath)/menubar_connected.png") ?
-            "\(resPath)/menubar_connected.png" : "\(assetsPath)/menubar_connected.png"
-        let disconnPath = FileManager.default.fileExists(atPath: "\(resPath)/menubar_disconnected.png") ?
-            "\(resPath)/menubar_disconnected.png" : "\(assetsPath)/menubar_disconnected.png"
+        let connPath = FileManager.default.fileExists(atPath: "\(resPath)/menubar_connected@2x.png") ?
+            "\(resPath)/menubar_connected@2x.png" : (FileManager.default.fileExists(atPath: "\(assetsPath)/menubar_connected@2x.png") ?
+            "\(assetsPath)/menubar_connected@2x.png" : "\(assetsPath)/menubar_connected.png")
+
+        let disconnPath = FileManager.default.fileExists(atPath: "\(resPath)/menubar_disconnected@2x.png") ?
+            "\(resPath)/menubar_disconnected@2x.png" : (FileManager.default.fileExists(atPath: "\(assetsPath)/menubar_disconnected@2x.png") ?
+            "\(assetsPath)/menubar_disconnected@2x.png" : "\(assetsPath)/menubar_disconnected.png")
 
         if let img = NSImage(contentsOfFile: connPath) {
-            img.isTemplate = false // Keep full vibrant colors!
-            img.size = NSSize(width: 22, height: 22)
+            img.isTemplate = false
+            img.size = NSSize(width: 24, height: 22)
             self.connectedIcon = img
         }
 
         if let img = NSImage(contentsOfFile: disconnPath) {
-            img.isTemplate = false // Grayscale
-            img.size = NSSize(width: 22, height: 22)
+            img.isTemplate = false
+            img.size = NSSize(width: 24, height: 22)
             self.disconnectedIcon = img
         }
     }
@@ -494,6 +497,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = statusItem.button {
             button.title = ""
             button.image = isMounted ? connectedIcon : disconnectedIcon
+            button.imageScaling = .scaleProportionallyUpOrDown
             button.imagePosition = .imageOnly
         }
         rebuildMenu(isMounted: isMounted)
