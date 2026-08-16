@@ -6,6 +6,7 @@ import Foundation
 
 // ==============================================================================
 // SSDEjector - Native macOS SSD Management & Instant Ejector
+// Includes Auto-Spillover Offline Storage & Reconnect Auto-Sync
 // Copyright (c) 2026 Vedant Narayan. Released under the MIT License.
 // ==============================================================================
 
@@ -75,10 +76,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var maintenanceTimer: Timer?
     private var wasAutoUnmountedForSleep = false
 
+    private let spilloverFolders = [
+        ("Documents/Screenshots", "Documents_Archive/Screenshots"),
+        ("Documents/Priyanka Fashionvilla", "Documents_Archive/Priyanka Fashionvilla"),
+        ("Documents/PsyMetric", "Documents_Archive/PsyMetric")
+    ]
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         gAppDelegate = self
         loadConfiguration()
-        logDebug("SSDEjector initialized for target volume: \(ssdName) (\(ssdMountPath))")
+        logDebug("SSDEjector initialized for target volume: \(ssdName)")
 
         applyHidutilMapping()
         setupMenuBar()
@@ -86,6 +93,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupSleepWakePowerSaver()
         setupCarbonF4HotKey()
         updateStatus()
+
+        // If currently mounted, ensure sync and symlinks are active
+        if FileManager.default.fileExists(atPath: ssdMountPath) {
+            syncLocalSpilloverFolders()
+        }
 
         maintenanceTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
             applyHidutilMapping()
@@ -109,6 +121,61 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.ssdVolumeUUID = uuid
                 }
             } catch {}
+        }
+    }
+
+    // MARK: - Smart Spillover & Auto-Sync Engine
+    private func syncLocalSpilloverFolders() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            var totalSyncedFiles = 0
+
+            for (relLocal, relExt) in self.spilloverFolders {
+                let localPath = "\(home)/\(relLocal)"
+                let extPath = "\(self.ssdMountPath)/\(relExt)"
+
+                // Ensure external target directory exists
+                _ = self.runCommand("/bin/mkdir", ["-p", extPath])
+
+                var isDir: ObjCBool = false
+                if FileManager.default.fileExists(atPath: localPath, isDirectory: &isDir) {
+                    let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: localPath)) != nil
+                    if !isSymlink && isDir.boolValue {
+                        logDebug("Found local offline files in \(relLocal). Moving to external SSD...")
+                        let (success, out) = self.runCommand("/usr/bin/rsync", ["-av", "--remove-source-files", "\(localPath)/", "\(extPath)/"])
+                        if success {
+                            let fileCount = out.components(separatedBy: "\n").filter { !$0.isEmpty && !$0.hasSuffix("/") }.count
+                            totalSyncedFiles += fileCount
+                            try? FileManager.default.removeItem(atPath: localPath)
+                            try? FileManager.default.createSymbolicLink(atPath: localPath, withDestinationPath: extPath)
+                            logDebug("Replaced \(relLocal) with transparent symlink to external SSD.")
+                        }
+                    }
+                } else {
+                    // Path doesn't exist, create symlink directly
+                    try? FileManager.default.createSymbolicLink(atPath: localPath, withDestinationPath: extPath)
+                }
+            }
+
+            if totalSyncedFiles > 0 {
+                DispatchQueue.main.async {
+                    self.showNotification(title: "⚡ Storage Auto-Synced", subtitle: "Moved \(totalSyncedFiles) offline files directly to \(self.ssdName).")
+                }
+            }
+        }
+    }
+
+    private func handleDriveDisconnected() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        for (relLocal, _) in self.spilloverFolders {
+            let localPath = "\(home)/\(relLocal)"
+            let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: localPath)) != nil
+            if isSymlink {
+                try? FileManager.default.removeItem(atPath: localPath)
+                try? FileManager.default.createDirectory(atPath: localPath, withIntermediateDirectories: true)
+                logDebug("SSD Disconnected -> Converted \(relLocal) to local folder for offline saving.")
+            }
         }
     }
 
@@ -149,7 +216,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self = self else { return }
             if FileManager.default.fileExists(atPath: self.ssdMountPath) {
-                logDebug("[BatterySaver] System sleeping -> Auto-unmounting \(self.ssdName) to cut sleep battery drain.")
+                logDebug("[BatterySaver] System sleeping -> Auto-unmounting \(self.ssdName)...")
                 self.wasAutoUnmountedForSleep = true
                 _ = self.runCommand("/bin/sync", [])
                 _ = self.runCommand("/usr/sbin/diskutil", ["unmount", self.ssdMountPath])
@@ -173,6 +240,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     DispatchQueue.main.async {
                         self.updateStatus()
+                        self.syncLocalSpilloverFolders()
                     }
                 }
             } else {
@@ -224,7 +292,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             openItem.target = self
             menu.addItem(openItem)
         } else {
-            let disconnectedItem = NSMenuItem(title: "⚪ \(ssdName) is Ejected / Disconnected", action: nil, keyEquivalent: "")
+            let disconnectedItem = NSMenuItem(title: "⚪ \(ssdName) is Disconnected / Ejected", action: nil, keyEquivalent: "")
             disconnectedItem.isEnabled = false
             menu.addItem(disconnectedItem)
 
@@ -260,6 +328,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             DispatchQueue.main.async {
                 self.updateStatus()
+                self.syncLocalSpilloverFolders()
             }
         }
     }
@@ -282,13 +351,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
             if let path = notif.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL, path.path == self.ssdMountPath {
                 self.updateStatus()
+                self.syncLocalSpilloverFolders()
                 NSSound(named: "Blow")?.play()
-                self.showNotification(title: "⚡ SSD Connected", subtitle: "\(self.ssdName) is mounted and ready.")
+                self.showNotification(title: "⚡ SSD Connected", subtitle: "\(self.ssdName) is mounted and auto-synced.")
             }
         }
 
         center.addObserver(forName: NSWorkspace.didUnmountNotification, object: nil, queue: .main) { [weak self] notif in
             guard let self = self else { return }
+            self.handleDriveDisconnected()
             self.updateStatus()
         }
     }
@@ -374,6 +445,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleEjectSuccess() {
+        handleDriveDisconnected()
         showNotification(title: "SSD Ejected Safely", subtitle: "\(ssdName) is safe to disconnect.")
         playSpeakerChime()
         updateStatus()
