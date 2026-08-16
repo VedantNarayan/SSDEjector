@@ -206,12 +206,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Real-Time Live Rsync Execution with Streaming Updates
+    // MARK: - Real-Time Live Rsync Execution with Streaming Updates (macOS BSD rsync compatible)
     private func runRsyncWithLiveProgress(localPath: String, remotePath: String, folderName: String) -> Bool {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/rsync")
-        // Use --info=progress2 for total progress calculation
-        proc.arguments = ["-av", "--info=progress2", "\(localPath)/", "\(remotePath)/"]
+        // Use --progress for macOS BSD rsync compatibility
+        proc.arguments = ["-av", "--progress", "\(localPath)/", "\(remotePath)/"]
 
         let pipe = Pipe()
         proc.standardOutput = pipe
