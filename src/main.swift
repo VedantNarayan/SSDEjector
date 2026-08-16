@@ -6,13 +6,13 @@ import Foundation
 
 // ==============================================================================
 // SSDEjector - Native macOS SSD Management & Universal Storage Orchestrator
-// Full GUI Folder Manager & Custom Multi-Directory AutoSync Engine
+// 3-Tier Storage Engine: Mirror Sync, Spillover Reclaim, & Direct Offload
 // Copyright (c) 2026 Vedant Narayan. Released under the MIT License.
 // ==============================================================================
 
 struct TrackedFolder: Codable {
     var localPath: String
-    var mode: String // "mirror" (Local Buffer + Background Sync) or "offload" (Direct SSD Storage)
+    var mode: String // "mirror" (Local Buffer), "spillover" (Auto-Reclaim), or "offload" (Direct SSD)
 }
 
 func logDebug(_ msg: String) {
@@ -99,7 +99,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         gAppDelegate = self
         loadConfiguration()
-        logDebug("SSDEjector 6.0 Universal Folder Orchestrator initialized.")
+        logDebug("SSDEjector 6.1 (3-Tier Storage Orchestrator) initialized.")
 
         applyHidutilMapping()
         setupMenuBar()
@@ -128,7 +128,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         detectVolumeUUID()
 
-        // Initialize default manifest if not present
         if !FileManager.default.fileExists(atPath: configURL.path) {
             let home = FileManager.default.homeDirectoryForCurrentUser.path
             let defaults = [
@@ -165,7 +164,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Universal Multi-Directory Sync Engine
+    // MARK: - 3-Tier Multi-Directory Storage Engine
     func syncAllTrackedFolders() {
         syncLock.lock()
         if isSyncing {
@@ -195,7 +194,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 _ = self.runCommand("/bin/mkdir", ["-p", remotePath])
 
                 if item.mode == "mirror" {
-                    // MODE A: Local Buffer + Background Sync (Screenshots, Active Projects)
+                    // TIER 1: Local Buffer + Background Mirror
                     if FileManager.default.fileExists(atPath: localPath) {
                         let (success, out) = self.runCommand("/usr/bin/rsync", ["-av", "\(localPath)/", "\(remotePath)/"])
                         if success {
@@ -203,8 +202,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                             totalSyncedFiles += count
                         }
                     }
+                } else if item.mode == "spillover" {
+                    // TIER 2: Temporary Spillover + Auto-Reclaim Internal Space
+                    let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: localPath)) != nil
+                    if !isSymlink {
+                        var isDir: ObjCBool = false
+                        if FileManager.default.fileExists(atPath: localPath, isDirectory: &isDir) && isDir.boolValue {
+                            let (success, out) = self.runCommand("/usr/bin/rsync", ["-av", "--remove-source-files", "\(localPath)/", "\(remotePath)/"])
+                            if success {
+                                let count = out.components(separatedBy: "\n").filter { !$0.isEmpty && !$0.hasSuffix("/") && !$0.contains("building file list") && !$0.contains("sent ") && !$0.contains("total size") && !$0.contains("Transfer starting:") }.count
+                                totalSyncedFiles += count
+                                _ = self.runCommand("/bin/rm", ["-rf", localPath])
+                                _ = self.runCommand("/bin/ln", ["-s", remotePath, localPath])
+                            }
+                        }
+                    }
                 } else if item.mode == "offload" {
-                    // MODE B: Direct SSD Storage + Symlink (Heavy Archives)
+                    // TIER 3: Direct External Storage (100% on SSD)
                     let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: localPath)) != nil
                     if !isSymlink {
                         var isDir: ObjCBool = false
@@ -219,8 +233,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             if totalSyncedFiles > 0 {
                 DispatchQueue.main.async {
-                    self.showNotification(title: "⚡ Storage Auto-Synced", subtitle: "Synchronized \(totalSyncedFiles) updated file(s) across your folders to \(self.ssdName).")
+                    self.showNotification(title: "⚡ Storage Synchronized", subtitle: "Synced \(totalSyncedFiles) updated file(s) across your folders to \(self.ssdName).")
                 }
+            }
+        }
+    }
+
+    private func handleDriveDisconnected() {
+        let folders = getTrackedFolders()
+        for item in folders where item.mode == "spillover" {
+            let localPath = (item.localPath as NSString).expandingTildeInPath
+            let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: localPath)) != nil
+            if isSymlink {
+                try? FileManager.default.removeItem(atPath: localPath)
+                try? FileManager.default.createDirectory(atPath: localPath, withIntermediateDirectories: true)
+                logDebug("[Spillover] Disconnected -> Converted \(localPath) to real local folder for offline saving.")
             }
         }
     }
@@ -232,13 +259,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let folders = getTrackedFolders()
         var folderListText = ""
         for (idx, f) in folders.enumerated() {
-            let modeDesc = f.mode == "mirror" ? "⚡ Local Buffer + Auto-Sync" : "💾 Direct SSD Storage (Symlink)"
+            var modeDesc = ""
+            if f.mode == "mirror" {
+                modeDesc = "⚡ Local Buffer + Mirror Sync (Dual Copy)"
+            } else if f.mode == "spillover" {
+                modeDesc = "🧹 Spillover + Auto-Reclaim (Zero Internal Waste)"
+            } else {
+                modeDesc = "💾 Direct SSD Storage (Symlink)"
+            }
+
             let folderName = (f.localPath as NSString).lastPathComponent
             folderListText += "\(idx + 1). 📁 \(folderName)\n    Path: \(f.localPath)\n    Mode: \(modeDesc)\n\n"
         }
 
         if folderListText.isEmpty {
-            folderListText = "No custom folders tracked yet.\nClick 'Add New Folder' below to track any folder on your Mac!"
+            folderListText = "No custom folders tracked yet.\nClick 'Add Folder to Sync' below to track any folder on your Mac!"
         }
 
         let alert = NSAlert()
@@ -253,14 +288,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let response = alert.runModal()
 
         if response == .alertFirstButtonReturn {
-            // Add New Folder Dialog
             promptAddFolder()
         } else if response == .alertSecondButtonReturn {
-            // Sync All Now
             syncAllTrackedFolders()
             showNotification(title: "⚡ Sync Triggered", subtitle: "Synchronizing all tracked folders with \(ssdName)...")
         } else if response == .alertThirdButtonReturn {
-            // Remove Folder Dialog
             promptRemoveFolder()
         }
     }
@@ -268,7 +300,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func promptAddFolder() {
         let openPanel = NSOpenPanel()
         openPanel.title = "Select Any Folder to Sync with External SSD"
-        openPanel.showsResizeIndicator = true
         openPanel.showsHiddenFiles = false
         openPanel.canChooseDirectories = true
         openPanel.canChooseFiles = false
@@ -279,22 +310,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let selectedPath = selectedURL.path
             let folderName = selectedURL.lastPathComponent
 
-            // Prompt for Sync Mode
             let modeAlert = NSAlert()
-            modeAlert.messageText = "Choose Sync Mode for '\(folderName)'"
+            modeAlert.messageText = "Choose Storage Mode for '\(folderName)'"
             modeAlert.informativeText = """
             Select how you want SSDEjector to manage this folder:
 
-            1. ⚡ Local Buffer + Auto-Sync (Recommended):
-               • Keeps folder local on Mac (0 broken links when offline, permanent in Finder sidebar).
+            1. ⚡ Local Buffer + Mirror Sync (Dual Copy):
+               • Keeps folder permanently on internal Mac (0 broken links when offline, permanent in Finder sidebar).
                • Automatically mirrors all files to External SSD when connected.
 
-            2. 💾 Direct Storage Offload (Max Space Recovery):
-               • Moves files to External SSD to free up 100% internal Mac space.
-               • Transparently links back to your Mac.
+            2. 🧹 Spillover + Auto-Reclaim (Zero Internal Waste):
+               • Saves locally when offline (0 errors when traveling).
+               • When SSD connects, moves files to SSD and FREES UP 100% internal space!
+
+            3. 💾 Direct Storage Offload (Max Free Space):
+               • Stores 100% on External SSD from day one.
+               • Uses 0 GB of internal storage.
             """
             modeAlert.alertStyle = .informational
-            modeAlert.addButton(withTitle: "⚡ Local Buffer + Sync (Recommended)")
+            modeAlert.addButton(withTitle: "⚡ Local Buffer + Mirror Sync")
+            modeAlert.addButton(withTitle: "🧹 Spillover & Reclaim Space")
             modeAlert.addButton(withTitle: "💾 Direct Storage Offload")
             modeAlert.addButton(withTitle: "Cancel")
 
@@ -303,6 +338,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if modeResponse == .alertFirstButtonReturn {
                 chosenMode = "mirror"
             } else if modeResponse == .alertSecondButtonReturn {
+                chosenMode = "spillover"
+            } else if modeResponse == .alertThirdButtonReturn {
                 chosenMode = "offload"
             } else {
                 return
@@ -314,7 +351,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             saveTrackedFolders(current)
 
             syncAllTrackedFolders()
-            showNotification(title: "Folder Added to Sync", subtitle: "'\(folderName)' is now automatically tracked and synced.")
+            showNotification(title: "Folder Added to Sync", subtitle: "'\(folderName)' is now configured with \(chosenMode) mode.")
             openFolderManager()
         }
     }
@@ -474,7 +511,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // NEW: Manage Synced Folders GUI Menu Item
         let manageFoldersItem = NSMenuItem(title: "📁 Manage Synced Folders...", action: #selector(openFolderManager), keyEquivalent: "f")
         manageFoldersItem.target = self
         menu.addItem(manageFoldersItem)
@@ -531,6 +567,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         center.addObserver(forName: NSWorkspace.didUnmountNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.handleDriveDisconnected()
             self?.updateStatus()
         }
     }
@@ -644,6 +681,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleEjectSuccess() {
+        handleDriveDisconnected()
         showNotification(title: "SSD Ejected Safely", subtitle: "\(ssdName) is safe to disconnect.")
         playSpeakerChime()
         updateStatus()
