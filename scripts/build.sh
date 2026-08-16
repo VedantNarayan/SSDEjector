@@ -1,27 +1,18 @@
 #!/bin/bash
 set -e
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APP_BUNDLE="${PROJECT_DIR}/dist/SSDEjector.app"
 
-PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD_DIR="${PROJECT_ROOT}/build"
-APP_BUNDLE="${BUILD_DIR}/SSDEjector.app"
-
-echo "🔨 Building SSDEjector for macOS (Universal Apple Silicon & Intel)..."
-
-rm -rf "${BUILD_DIR}"
+echo "🔨 Compiling SSDEjector..."
 mkdir -p "${APP_BUNDLE}/Contents/MacOS"
 mkdir -p "${APP_BUNDLE}/Contents/Resources"
-mkdir -p "${BUILD_DIR}/bin"
 
-cp "${PROJECT_ROOT}/resources/Info.plist" "${APP_BUNDLE}/Contents/Info.plist"
+swiftc -O "${PROJECT_DIR}/src/main.swift" -o "${APP_BUNDLE}/Contents/MacOS/SSDEjector"
+swiftc -O "${PROJECT_DIR}/src/play_speaker_chime.swift" -o "${PROJECT_DIR}/bin/play_speaker_chime"
 
-# Compile main binary
-swiftc -O "${PROJECT_ROOT}/src/main.swift" \
-    -target arm64-apple-macos12.0 \
-    -o "${APP_BUNDLE}/Contents/MacOS/SSDEjector"
+cp "${PROJECT_DIR}/Info.plist" "${APP_BUNDLE}/Contents/Info.plist"
+if [ -f "${PROJECT_DIR}/assets/AppIcon.icns" ]; then
+    cp "${PROJECT_DIR}/assets/AppIcon.icns" "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
+fi
 
-# Compile speaker chime binary
-swiftc -O "${PROJECT_ROOT}/src/play_speaker_chime.swift" \
-    -target arm64-apple-macos12.0 \
-    -o "${BUILD_DIR}/bin/play_speaker_chime"
-
-echo "✅ Build completed successfully: ${APP_BUNDLE}"
+echo "✅ Build Complete: ${APP_BUNDLE}"
