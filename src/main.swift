@@ -136,13 +136,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let img = NSImage(contentsOfFile: connPath) {
             img.isTemplate = false // Keep full vibrant colors!
-            img.size = NSSize(width: 18, height: 18)
+            img.size = NSSize(width: 22, height: 22)
             self.connectedIcon = img
         }
 
         if let img = NSImage(contentsOfFile: disconnPath) {
             img.isTemplate = false // Grayscale
-            img.size = NSSize(width: 18, height: 18)
+            img.size = NSSize(width: 22, height: 22)
             self.disconnectedIcon = img
         }
     }
