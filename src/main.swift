@@ -6,7 +6,7 @@ import Foundation
 
 // ==============================================================================
 // SSDEjector - Native macOS SSD Management & Instant Ejector
-// Includes Finder Sidebar Preservation & Smart System Daemon Bypass
+// Persistent Sidebar Preservation & Non-Destructive Symlink Management
 // Copyright (c) 2026 Vedant Narayan. Released under the MIT License.
 // ==============================================================================
 
@@ -87,14 +87,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let syncLock = NSLock()
     private var isSyncing = false
 
-    private var manifestPath: String {
-        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssdejector_spillover_manifest.json").path
-    }
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         gAppDelegate = self
         loadConfiguration()
-        logDebug("SSDEjector 4.6 initialized (with Finder Sidebar Preservation).")
+        logDebug("SSDEjector 5.1 initialized (Non-Destructive Sidebar Preservation).")
 
         applyHidutilMapping()
         setupMenuBar()
@@ -105,8 +101,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if FileManager.default.fileExists(atPath: ssdMountPath) {
             syncAllSpilloverFolders()
-        } else {
-            handleDriveDisconnected()
         }
 
         maintenanceTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
@@ -134,7 +128,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Dynamic Universal Spillover & Auto-Sync Engine
+    // MARK: - Non-Destructive Persistent Document Linker & AutoSync
     private func syncAllSpilloverFolders() {
         syncLock.lock()
         if isSyncing {
@@ -154,7 +148,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             let home = FileManager.default.homeDirectoryForCurrentUser.path
             let documentsArchive = "\(self.ssdMountPath)/Documents_Archive"
-            var activeManifest: [String: String] = [:]
             var totalSyncedFiles = 0
 
             if let entries = try? FileManager.default.contentsOfDirectory(atPath: documentsArchive) {
@@ -165,84 +158,40 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
                     var isDir: ObjCBool = false
                     if FileManager.default.fileExists(atPath: extFolder, isDirectory: &isDir) && isDir.boolValue {
-                        activeManifest["Documents/\(item)"] = "Documents_Archive/\(item)"
+                        
+                        let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: localFolder)) != nil
+                        
+                        if isSymlink {
+                            // Symlink already exists and is healthy -> DO NOT delete or re-create it (preserves Sidebar bookmark!)
+                            continue
+                        }
 
                         var isLocalDir: ObjCBool = false
                         if FileManager.default.fileExists(atPath: localFolder, isDirectory: &isLocalDir) {
-                            let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: localFolder)) != nil
-                            if !isSymlink && isLocalDir.boolValue {
-                                logDebug("Dynamic Spillover: Found offline files in Documents/\(item). Syncing to external...")
+                            if isLocalDir.boolValue {
+                                // If offline files exist in real directory, migrate them
+                                logDebug("Dynamic Spillover: Found offline files in Documents/\(item). Migrating to external...")
                                 let (success, out) = self.runCommand("/usr/bin/rsync", ["-av", "--remove-source-files", "\(localFolder)/", "\(extFolder)/"])
                                 if success {
                                     let count = out.components(separatedBy: "\n").filter { !$0.isEmpty && !$0.hasSuffix("/") && !$0.contains("building file list") && !$0.contains("sent ") && !$0.contains("total size") && !$0.contains("Transfer starting:") }.count
                                     totalSyncedFiles += count
                                     _ = self.runCommand("/bin/rm", ["-rf", localFolder])
                                     _ = self.runCommand("/bin/ln", ["-s", extFolder, localFolder])
-                                    logDebug("Successfully moved \(count) file(s) and re-established symlink Documents/\(item) -> \(extFolder)")
-                                    
-                                    // Preserve Finder Sidebar Item
-                                    if item == "Screenshots" {
-                                        self.restoreFinderSidebarItem(path: localFolder)
-                                    }
+                                    logDebug("Successfully moved \(count) file(s) and established symlink Documents/\(item) -> \(extFolder)")
                                 }
                             }
                         } else {
+                            // Target does not exist at all -> create persistent symlink once
                             _ = self.runCommand("/bin/ln", ["-s", extFolder, localFolder])
+                            logDebug("Created persistent symlink Documents/\(item) -> \(extFolder)")
                         }
                     }
                 }
             }
 
-            if let data = try? JSONSerialization.data(withJSONObject: activeManifest, options: .prettyPrinted) {
-                try? data.write(to: URL(fileURLWithPath: self.manifestPath))
-            }
-
             if totalSyncedFiles > 0 {
                 DispatchQueue.main.async {
                     self.showNotification(title: "⚡ Storage Auto-Synced", subtitle: "Moved \(totalSyncedFiles) offline file(s) directly to \(self.ssdName).")
-                }
-            }
-        }
-    }
-
-    private func restoreFinderSidebarItem(path: String) {
-        let script = """
-        tell application "Finder"
-            select POSIX file "\(path)"
-        end tell
-        tell application "System Events"
-            keystroke "t" using {command down, control down}
-        end tell
-        """
-        _ = runCommand("/usr/bin/osascript", ["-e", script])
-    }
-
-    private func handleDriveDisconnected() {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        var manifest: [String: String] = [:]
-
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: manifestPath)),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: String] {
-            manifest = json
-        } else {
-            manifest = [
-                "Documents/Screenshots": "Documents_Archive/Screenshots",
-                "Documents/Priyanka Fashionvilla": "Documents_Archive/Priyanka Fashionvilla",
-                "Documents/PsyMetric": "Documents_Archive/PsyMetric"
-            ]
-        }
-
-        for (relLocal, _) in manifest {
-            let localPath = "\(home)/\(relLocal)"
-            let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: localPath)) != nil
-            if isSymlink {
-                try? FileManager.default.removeItem(atPath: localPath)
-                try? FileManager.default.createDirectory(atPath: localPath, withIntermediateDirectories: true)
-                logDebug("Drive Disconnected -> Converted \(relLocal) to real local folder for offline saving.")
-                
-                // Re-pin to sidebar so offline conversion never unpins it
-                if relLocal.hasSuffix("Screenshots") {
-                    restoreFinderSidebarItem(path: localPath)
                 }
             }
         }
@@ -422,14 +371,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.updateStatus()
                 self.syncAllSpilloverFolders()
                 NSSound(named: "Blow")?.play()
-                self.showNotification(title: "⚡ SSD Connected", subtitle: "\(self.ssdName) is mounted and auto-synced.")
+                self.showNotification(title: "⚡ SSD Connected", subtitle: "\(self.ssdName) is mounted.")
             }
         }
 
-        center.addObserver(forName: NSWorkspace.didUnmountNotification, object: nil, queue: .main) { [weak self] notif in
-            guard let self = self else { return }
-            self.handleDriveDisconnected()
-            self.updateStatus()
+        center.addObserver(forName: NSWorkspace.didUnmountNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.updateStatus()
         }
     }
 
@@ -542,7 +489,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleEjectSuccess() {
-        handleDriveDisconnected()
         showNotification(title: "SSD Ejected Safely", subtitle: "\(ssdName) is safe to disconnect.")
         playSpeakerChime()
         updateStatus()
