@@ -6,7 +6,7 @@ import Foundation
 
 // ==============================================================================
 // SSDEjector - Native macOS SSD Management & Instant Ejector
-// Includes Auto-Spillover Offline Storage & Reconnect Auto-Sync
+// Dynamic Universal Document Spillover & AutoSync-on-Connect Engine
 // Copyright (c) 2026 Vedant Narayan. Released under the MIT License.
 // ==============================================================================
 
@@ -76,11 +76,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var maintenanceTimer: Timer?
     private var wasAutoUnmountedForSleep = false
 
-    private let spilloverFolders = [
-        ("Documents/Screenshots", "Documents_Archive/Screenshots"),
-        ("Documents/Priyanka Fashionvilla", "Documents_Archive/Priyanka Fashionvilla"),
-        ("Documents/PsyMetric", "Documents_Archive/PsyMetric")
-    ]
+    private var manifestPath: String {
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssdejector_spillover_manifest.json").path
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         gAppDelegate = self
@@ -94,9 +92,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupCarbonF4HotKey()
         updateStatus()
 
-        // If currently mounted, ensure sync and symlinks are active
         if FileManager.default.fileExists(atPath: ssdMountPath) {
-            syncLocalSpilloverFolders()
+            syncAllSpilloverFolders()
         }
 
         maintenanceTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
@@ -124,43 +121,56 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Smart Spillover & Auto-Sync Engine
-    private func syncLocalSpilloverFolders() {
+    // MARK: - Dynamic Universal Spillover & Auto-Sync Engine
+    private func syncAllSpilloverFolders() {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self = self else { return }
             let home = FileManager.default.homeDirectoryForCurrentUser.path
+            let documentsArchive = "\(self.ssdMountPath)/Documents_Archive"
+            var activeManifest: [String: String] = [:]
             var totalSyncedFiles = 0
 
-            for (relLocal, relExt) in self.spilloverFolders {
-                let localPath = "\(home)/\(relLocal)"
-                let extPath = "\(self.ssdMountPath)/\(relExt)"
+            // 1. Discover all subfolders in external Documents_Archive
+            if let entries = try? FileManager.default.contentsOfDirectory(atPath: documentsArchive) {
+                for item in entries {
+                    if item.hasPrefix(".") { continue }
+                    let extFolder = "\(documentsArchive)/\(item)"
+                    let localFolder = "\(home)/Documents/\(item)"
 
-                // Ensure external target directory exists
-                _ = self.runCommand("/bin/mkdir", ["-p", extPath])
+                    var isDir: ObjCBool = false
+                    if FileManager.default.fileExists(atPath: extFolder, isDirectory: &isDir) && isDir.boolValue {
+                        activeManifest["Documents/\(item)"] = "Documents_Archive/\(item)"
 
-                var isDir: ObjCBool = false
-                if FileManager.default.fileExists(atPath: localPath, isDirectory: &isDir) {
-                    let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: localPath)) != nil
-                    if !isSymlink && isDir.boolValue {
-                        logDebug("Found local offline files in \(relLocal). Moving to external SSD...")
-                        let (success, out) = self.runCommand("/usr/bin/rsync", ["-av", "--remove-source-files", "\(localPath)/", "\(extPath)/"])
-                        if success {
-                            let fileCount = out.components(separatedBy: "\n").filter { !$0.isEmpty && !$0.hasSuffix("/") }.count
-                            totalSyncedFiles += fileCount
-                            try? FileManager.default.removeItem(atPath: localPath)
-                            try? FileManager.default.createSymbolicLink(atPath: localPath, withDestinationPath: extPath)
-                            logDebug("Replaced \(relLocal) with transparent symlink to external SSD.")
+                        var isLocalDir: ObjCBool = false
+                        if FileManager.default.fileExists(atPath: localFolder, isDirectory: &isLocalDir) {
+                            let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: localFolder)) != nil
+                            if !isSymlink && isLocalDir.boolValue {
+                                logDebug("Dynamic Spillover: Found offline files in Documents/\(item). Syncing to external...")
+                                let (success, out) = self.runCommand("/usr/bin/rsync", ["-av", "--remove-source-files", "\(localFolder)/", "\(extFolder)/"])
+                                if success {
+                                    let count = out.components(separatedBy: "\n").filter { !$0.isEmpty && !$0.hasSuffix("/") && !$0.contains("building file list") && !$0.contains("sent ") && !$0.contains("total size") }.count
+                                    totalSyncedFiles += count
+                                    try? FileManager.default.removeItem(atPath: localFolder)
+                                    try? FileManager.default.createSymbolicLink(atPath: localFolder, withDestinationPath: extFolder)
+                                    logDebug("Linked Documents/\(item) -> \(extFolder)")
+                                }
+                            }
+                        } else {
+                            try? FileManager.default.createSymbolicLink(atPath: localFolder, withDestinationPath: extFolder)
+                            logDebug("Created symlink Documents/\(item) -> \(extFolder)")
                         }
                     }
-                } else {
-                    // Path doesn't exist, create symlink directly
-                    try? FileManager.default.createSymbolicLink(atPath: localPath, withDestinationPath: extPath)
                 }
+            }
+
+            // Save manifest for offline lookup
+            if let data = try? JSONSerialization.data(withJSONObject: activeManifest, options: .prettyPrinted) {
+                try? data.write(to: URL(fileURLWithPath: self.manifestPath))
             }
 
             if totalSyncedFiles > 0 {
                 DispatchQueue.main.async {
-                    self.showNotification(title: "⚡ Storage Auto-Synced", subtitle: "Moved \(totalSyncedFiles) offline files directly to \(self.ssdName).")
+                    self.showNotification(title: "⚡ Storage Auto-Synced", subtitle: "Moved \(totalSyncedFiles) offline file(s) across your folders to \(self.ssdName).")
                 }
             }
         }
@@ -168,13 +178,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleDriveDisconnected() {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        for (relLocal, _) in self.spilloverFolders {
+        var manifest: [String: String] = [:]
+
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: manifestPath)),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: String] {
+            manifest = json
+        } else {
+            manifest = [
+                "Documents/Screenshots": "Documents_Archive/Screenshots",
+                "Documents/Priyanka Fashionvilla": "Documents_Archive/Priyanka Fashionvilla",
+                "Documents/PsyMetric": "Documents_Archive/PsyMetric"
+            ]
+        }
+
+        for (relLocal, _) in manifest {
             let localPath = "\(home)/\(relLocal)"
             let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: localPath)) != nil
             if isSymlink {
                 try? FileManager.default.removeItem(atPath: localPath)
                 try? FileManager.default.createDirectory(atPath: localPath, withIntermediateDirectories: true)
-                logDebug("SSD Disconnected -> Converted \(relLocal) to local folder for offline saving.")
+                logDebug("Drive Disconnected -> Converted \(relLocal) to real local folder for offline saving.")
             }
         }
     }
@@ -240,7 +263,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     DispatchQueue.main.async {
                         self.updateStatus()
-                        self.syncLocalSpilloverFolders()
+                        self.syncAllSpilloverFolders()
                     }
                 }
             } else {
@@ -328,7 +351,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             DispatchQueue.main.async {
                 self.updateStatus()
-                self.syncLocalSpilloverFolders()
+                self.syncAllSpilloverFolders()
             }
         }
     }
@@ -351,7 +374,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
             if let path = notif.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL, path.path == self.ssdMountPath {
                 self.updateStatus()
-                self.syncLocalSpilloverFolders()
+                self.syncAllSpilloverFolders()
                 NSSound(named: "Blow")?.play()
                 self.showNotification(title: "⚡ SSD Connected", subtitle: "\(self.ssdName) is mounted and auto-synced.")
             }
