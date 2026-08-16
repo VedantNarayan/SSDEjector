@@ -6,7 +6,7 @@ import Foundation
 
 // ==============================================================================
 // SSDEjector - Native macOS SSD Management & Instant Ejector
-// Persistent Sidebar Preservation & Non-Destructive Symlink Management
+// Real-Time Screenshot Sync & Non-Destructive Persistent Architecture
 // Copyright (c) 2026 Vedant Narayan. Released under the MIT License.
 // ==============================================================================
 
@@ -90,7 +90,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         gAppDelegate = self
         loadConfiguration()
-        logDebug("SSDEjector 5.1 initialized (Non-Destructive Sidebar Preservation).")
+        logDebug("SSDEjector 5.2 initialized (Real-Time Screenshot Sync & Non-Destructive Symlinks).")
 
         applyHidutilMapping()
         setupMenuBar()
@@ -106,6 +106,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         maintenanceTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
             applyHidutilMapping()
             self?.updateStatus()
+            if FileManager.default.fileExists(atPath: self?.ssdMountPath ?? "") {
+                self?.syncAllSpilloverFolders()
+            }
         }
     }
 
@@ -128,7 +131,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Non-Destructive Persistent Document Linker & AutoSync
+    // MARK: - Non-Destructive Persistent Document & Screenshot Sync Engine
     private func syncAllSpilloverFolders() {
         syncLock.lock()
         if isSyncing {
@@ -148,50 +151,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             let home = FileManager.default.homeDirectoryForCurrentUser.path
             let documentsArchive = "\(self.ssdMountPath)/Documents_Archive"
-            var totalSyncedFiles = 0
+            
+            // 1. Sync Pictures/Screenshots with External SSD
+            let localScreenshots = "\(home)/Pictures/Screenshots"
+            let extScreenshots = "\(documentsArchive)/Screenshots"
+            if FileManager.default.fileExists(atPath: extScreenshots) && FileManager.default.fileExists(atPath: localScreenshots) {
+                _ = self.runCommand("/usr/bin/rsync", ["-av", "\(localScreenshots)/", "\(extScreenshots)/"])
+            }
 
+            // 2. Sync Document Archive Folders
             if let entries = try? FileManager.default.contentsOfDirectory(atPath: documentsArchive) {
                 for item in entries {
-                    if item.hasPrefix(".") { continue }
+                    if item.hasPrefix(".") || item == "Screenshots" { continue }
                     let extFolder = "\(documentsArchive)/\(item)"
                     let localFolder = "\(home)/Documents/\(item)"
 
                     var isDir: ObjCBool = false
                     if FileManager.default.fileExists(atPath: extFolder, isDirectory: &isDir) && isDir.boolValue {
-                        
                         let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: localFolder)) != nil
-                        
-                        if isSymlink {
-                            // Symlink already exists and is healthy -> DO NOT delete or re-create it (preserves Sidebar bookmark!)
-                            continue
-                        }
-
-                        var isLocalDir: ObjCBool = false
-                        if FileManager.default.fileExists(atPath: localFolder, isDirectory: &isLocalDir) {
-                            if isLocalDir.boolValue {
-                                // If offline files exist in real directory, migrate them
-                                logDebug("Dynamic Spillover: Found offline files in Documents/\(item). Migrating to external...")
-                                let (success, out) = self.runCommand("/usr/bin/rsync", ["-av", "--remove-source-files", "\(localFolder)/", "\(extFolder)/"])
-                                if success {
-                                    let count = out.components(separatedBy: "\n").filter { !$0.isEmpty && !$0.hasSuffix("/") && !$0.contains("building file list") && !$0.contains("sent ") && !$0.contains("total size") && !$0.contains("Transfer starting:") }.count
-                                    totalSyncedFiles += count
-                                    _ = self.runCommand("/bin/rm", ["-rf", localFolder])
-                                    _ = self.runCommand("/bin/ln", ["-s", extFolder, localFolder])
-                                    logDebug("Successfully moved \(count) file(s) and established symlink Documents/\(item) -> \(extFolder)")
-                                }
+                        if !isSymlink {
+                            var isLocalDir: ObjCBool = false
+                            if FileManager.default.fileExists(atPath: localFolder, isDirectory: &isLocalDir) && isLocalDir.boolValue {
+                                _ = self.runCommand("/usr/bin/rsync", ["-av", "--remove-source-files", "\(localFolder)/", "\(extFolder)/"])
+                                _ = self.runCommand("/bin/rm", ["-rf", localFolder])
                             }
-                        } else {
-                            // Target does not exist at all -> create persistent symlink once
                             _ = self.runCommand("/bin/ln", ["-s", extFolder, localFolder])
-                            logDebug("Created persistent symlink Documents/\(item) -> \(extFolder)")
                         }
                     }
-                }
-            }
-
-            if totalSyncedFiles > 0 {
-                DispatchQueue.main.async {
-                    self.showNotification(title: "⚡ Storage Auto-Synced", subtitle: "Moved \(totalSyncedFiles) offline file(s) directly to \(self.ssdName).")
                 }
             }
         }
