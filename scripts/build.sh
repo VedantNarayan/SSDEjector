@@ -3,7 +3,7 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_BUNDLE="${PROJECT_DIR}/build/SSDEjector.app"
 
-echo "🔨 Compiling SSDEjector 8.5.0..."
+echo "🔨 Compiling SSDEjector 9.0.0..."
 rm -rf "${APP_BUNDLE}"
 mkdir -p "${APP_BUNDLE}/Contents/MacOS"
 mkdir -p "${APP_BUNDLE}/Contents/Resources"

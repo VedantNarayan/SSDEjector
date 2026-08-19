@@ -2,7 +2,7 @@
 set -e
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="8.5.0"
+VERSION="9.0.0"
 DMG_NAME="SSDEjector-v${VERSION}-macOS.dmg"
 DIST_DIR="${PROJECT_ROOT}/dist"
 BUILD_DIR="${PROJECT_ROOT}/build"

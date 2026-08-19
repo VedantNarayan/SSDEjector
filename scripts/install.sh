@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 echo "======================================================="
-echo "   ⚡ Installing SSDEjector 8.5.0 for volume: ${SSD_NAME}"
+echo "   ⚡ Installing SSDEjector 9.0.0 for volume: ${SSD_NAME}"
 echo "   Target user: ${CURRENT_USER} (UID: ${USER_UID})"
 echo "======================================================="
 
@@ -58,9 +58,9 @@ cat << PLIST_EOF > "${USER_HOME}/Applications/SSDEjector.app/Contents/Info.plist
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>8.5.0</string>
+    <string>9.0.0</string>
     <key>CFBundleVersion</key>
-    <string>8.5.0</string>
+    <string>9.0.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSHighResolutionCapable</key>
@@ -139,7 +139,7 @@ launchctl bootstrap gui/${USER_UID} "${USER_HOME}/Library/LaunchAgents/com.${CUR
 
 echo ""
 echo "======================================================="
-echo "   ✅ SSDEjector 8.5.0 Installed and Running Successfully!"
+echo "   ✅ SSDEjector 9.0.0 Installed and Running Successfully!"
 echo "   - Double-tap F4 to eject anytime."
 echo "   - Real-time streaming sync HUD & active data protection active."
 echo "   - Chime is always routed to built-in MacBook speakers at 100%."

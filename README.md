@@ -10,7 +10,7 @@
 [![Architecture](https://img.shields.io/badge/Architecture-Apple%20Silicon%20(M1%2FM2%2FM3%2FM4)%20%26%20Intel-blue?style=for-the-badge&logo=apple)](https://apple.com)
 [![Swift](https://img.shields.io/badge/Language-Swift%206.0-orange?style=for-the-badge&logo=swift)](https://swift.org)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v8.5.0-purple?style=for-the-badge)](https://github.com/VedantNarayan/SSDEjector/releases)
+[![Release](https://img.shields.io/badge/Release-v9.0.0-purple?style=for-the-badge)](https://github.com/VedantNarayan/SSDEjector/releases)
 
 <p align="center">
   <b>Double-Tap F4 to Eject</b> • <b>Dynamic 4K M.2 Menu Bar Icon</b> • <b>Active Data Protection Shield</b> • <b>Real-Time Sync HUD & Countdown ETA</b> • <b>Universal 3-Tier Storage</b> • <b>Battery Sleep-Saver</b> • <b>MacBook Physical Speaker Chime</b>
@@ -138,7 +138,7 @@ Click **`📁 Manage Synced Folders...`** in the menu bar to track and sync **an
 ## 🚀 Installation
 
 ### Option 1: Download Pre-built DMG (Recommended)
-1. Download [**`SSDEjector-v8.5.0-macOS.dmg`**](https://github.com/VedantNarayan/SSDEjector/releases/tag/v8.5.0).
+1. Download [**`SSDEjector-v9.0.0-macOS.dmg`**](https://github.com/VedantNarayan/SSDEjector/releases/tag/v9.0.0).
 2. Open the DMG and double-click **`Install.command`** (or drag `SSDEjector.app` to Applications).
 
 ### Option 2: 1-Line Terminal Install
