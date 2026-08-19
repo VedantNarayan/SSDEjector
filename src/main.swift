@@ -706,6 +706,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
             if let path = notif.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL, path.path.contains(self.ssdName) {
                 self.updateStatus()
+                // Disable Spotlight indexing lock on external volume
+                _ = self.runCommandWithTimeout("/usr/bin/mdutil", ["-i", "off", self.ssdMountPath], timeout: 2.0)
                 self.syncAllTrackedFolders()
                 NSSound(named: "Blow")?.play()
                 self.showNotification(title: "⚡ SSD Connected", subtitle: "\(self.ssdName) is mounted.")
@@ -762,17 +764,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         syncLock.unlock()
 
-        // STEP 2: Attempt fast direct unmount with 2.0s timeout
-        logDebug("Attempting fast direct diskutil eject for \(ssdMountPath)...")
-        let (ejectSuccess, ejectOutput) = runCommandWithTimeout("/usr/sbin/diskutil", ["eject", ssdMountPath], timeout: 2.0)
+        // STEP 2: Fast Dissenter Check & Intelligent Unmount
+        logDebug("Executing fast direct unmount for \(ssdMountPath)...")
+
+        // First attempt standard unmount with 3.5s timeout
+        let (ejectSuccess, ejectOutput) = runCommandWithTimeout("/usr/sbin/diskutil", ["unmount", ssdMountPath], timeout: 3.5)
 
         if ejectSuccess || !FileManager.default.fileExists(atPath: ssdMountPath) {
-            logDebug("Direct eject succeeded in <0.2s!")
+            logDebug("Direct unmount succeeded cleanly!")
+            _ = runCommandWithTimeout("/usr/sbin/diskutil", ["eject", ssdMountPath], timeout: 3.0)
             handleEjectSuccess()
             return
         }
 
-        logDebug("Direct eject encountered lock. Inspecting dissenter PIDs quickly...")
+        logDebug("Direct unmount encountered active handle. Inspecting PIDs quickly...")
         let allBlockingPIDs = getFastBlockingPIDs(ejectOutput: ejectOutput)
 
         var criticalSyncPIDs: [String] = []
@@ -794,12 +799,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // SCENARIO 1: Only system daemons -> Silent instant auto force-eject (<0.2s)
+        // SCENARIO 1: Only system daemons -> Direct force-unmount with 8s timeout (never kills early)
         if criticalSyncPIDs.isEmpty && regularUserAppPIDs.isEmpty {
-            logDebug("Only system daemons active on SSD. Executing safe automatic force-unmount...")
-            _ = runCommandWithTimeout("/bin/sync", [], timeout: 1.0)
-            let (forceSuccess, _) = runCommandWithTimeout("/usr/sbin/diskutil", ["unmount", "force", ssdMountPath], timeout: 2.0)
-            _ = runCommandWithTimeout("/usr/sbin/diskutil", ["eject", ssdMountPath], timeout: 2.0)
+            logDebug("Only system daemons active on SSD. Executing safe automatic force-unmount with full 8s timeout...")
+            _ = runCommandWithTimeout("/bin/sync", [], timeout: 1.5)
+            let (forceSuccess, _) = runCommandWithTimeout("/usr/sbin/diskutil", ["unmount", "force", ssdMountPath], timeout: 8.0)
+            _ = runCommandWithTimeout("/usr/sbin/diskutil", ["eject", ssdMountPath], timeout: 4.0)
 
             if forceSuccess || !FileManager.default.fileExists(atPath: ssdMountPath) {
                 handleEjectSuccess()
