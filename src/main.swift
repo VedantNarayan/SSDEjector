@@ -1,7 +1,5 @@
 import Cocoa
 import Carbon
-import CoreAudio
-import AudioToolbox
 import Foundation
 import UserNotifications
 
