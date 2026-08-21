@@ -5,7 +5,7 @@ import UserNotifications
 
 // ==============================================================================
 // SSDEjector - Native macOS SSD Management & Universal Storage Orchestrator
-// High-Performance Zero-Delay Ejection Engine & Clean Audio (v9.1.0)
+// Pure Storage Isolation Engine - Zero Audio Interventions (v9.3.0)
 // Copyright (c) 2026 Vedant Narayan. Released under the MIT License.
 // ==============================================================================
 
@@ -114,7 +114,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         gAppDelegate = self
         loadConfiguration()
-        logDebug("SSDEjector 9.1 (Clean Audio & Zero-Lag Instant Eject) initialized.")
+        logDebug("SSDEjector 9.3.0 (Pure Storage Isolation Engine) initialized.")
 
         applyHidutilMapping()
         loadIcons()
@@ -128,7 +128,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             syncAllTrackedFolders()
         }
 
-        // Smart Maintenance Timer: Re-applies keymap periodically, but does NOT spam disk with mkdir/rsync
         maintenanceTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
             applyHidutilMapping()
             self?.updateStatus()
@@ -170,7 +169,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if !FileManager.default.fileExists(atPath: configURL.path) {
             let home = FileManager.default.homeDirectoryForCurrentUser.path
             let defaults = [
-                TrackedFolder(localPath: "\(home)/Pictures/Screenshots", mode: "mirror"),
                 TrackedFolder(localPath: "\(home)/Documents/Priyanka Fashionvilla", mode: "offload"),
                 TrackedFolder(localPath: "\(home)/Documents/PsyMetric", mode: "offload")
             ]
@@ -707,7 +705,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if let path = notif.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL, path.path.contains(self.ssdName) {
                 self.updateStatus()
                 self.syncAllTrackedFolders()
-                NSSound(named: "Blow")?.play()
                 self.showNotification(title: "⚡ SSD Connected", subtitle: "\(self.ssdName) is mounted.")
             }
         }
@@ -753,7 +750,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // STEP 1: Stop any internal active sync process immediately
         syncLock.lock()
         if let proc = activeSyncProcess, proc.isRunning {
             logDebug("Internal background sync active during eject. Terminating immediately...")
@@ -762,10 +758,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         syncLock.unlock()
 
-        // Flush dirty filesystem blocks fast
         _ = runCommandWithTimeout("/bin/sync", [], timeout: 1.0)
 
-        // STEP 2: Fast Lock Inspection (<0.05s)
         let (ejectSuccess, ejectOutput) = runCommandWithTimeout("/usr/sbin/diskutil", ["unmount", ssdMountPath], timeout: 1.5)
 
         if ejectSuccess || !FileManager.default.fileExists(atPath: ssdMountPath) {
@@ -775,7 +769,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Direct unmount didn't return immediately (diskarbitrationd has locks)
         let allBlockingPIDs = getFastBlockingPIDs(ejectOutput: ejectOutput)
 
         var criticalSyncPIDs: [String] = []
@@ -797,8 +790,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // SCENARIO 1: ONLY SYSTEM DAEMONS (mds, fseventsd, quicklookd) -> Fast Force Unmount (<0.3s)
-        // Never wait for the 60s polite daemon timeout!
         if criticalSyncPIDs.isEmpty && regularUserAppPIDs.isEmpty {
             logDebug("Only system daemons active on SSD. Executing instant force-unmount (<0.3s)...")
             let (forceSuccess, _) = runCommandWithTimeout("/usr/sbin/diskutil", ["unmount", "force", ssdMountPath], timeout: 4.0)
@@ -812,7 +803,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // SCENARIO 2 & 3: User Apps or Active User File Transfers
         DispatchQueue.main.async {
             self.presentEjectModal(criticalSyncPIDs: criticalSyncPIDs, regularUserAppPIDs: regularUserAppPIDs, regularUserAppDescriptions: regularUserAppDescriptions)
         }
@@ -916,7 +906,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // SCENARIO 3: REGULAR USER APPLICATIONS
         let alert = NSAlert()
         alert.messageText = "Active Applications Using SSD"
         alert.informativeText = "The external SSD (\(ssdName)) is currently being used by:\n\n" +
@@ -963,18 +952,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleEjectSuccess() {
         handleDriveDisconnected()
         showNotification(title: "SSD Ejected Safely", subtitle: "\(ssdName) is safe to disconnect.")
-        playCleanSound()
         DispatchQueue.main.async {
             self.updateStatus()
-        }
-    }
-
-    // Clean, Non-Disruptive Audio Playback (Never modifies system audio output device or global volume)
-    private func playCleanSound() {
-        DispatchQueue.main.async {
-            let sound = NSSound(named: "Glass")
-            sound?.volume = 1.0
-            sound?.play()
         }
     }
 
@@ -1069,11 +1048,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showNotification(title: String, subtitle: String) {
-        DispatchQueue.global(qos: .utility).async {
-            let script = "display notification \"\(subtitle)\" with title \"\(title)\""
-            var error: NSDictionary?
-            NSAppleScript(source: script)?.executeAndReturnError(&error)
-        }
+        let center = UNUserNotificationCenter.current()
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = subtitle
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        center.add(request, withCompletionHandler: nil)
     }
 
     @objc private func quitApp() {
