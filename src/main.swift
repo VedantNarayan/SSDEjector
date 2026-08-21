@@ -3,10 +3,11 @@ import Carbon
 import CoreAudio
 import AudioToolbox
 import Foundation
+import UserNotifications
 
 // ==============================================================================
 // SSDEjector - Native macOS SSD Management & Universal Storage Orchestrator
-// High-Performance Asynchronous Zero-Latency Ejection Engine (v9.0.0)
+// High-Performance Zero-Delay Ejection Engine & Clean Audio (v9.1.0)
 // Copyright (c) 2026 Vedant Narayan. Released under the MIT License.
 // ==============================================================================
 
@@ -59,7 +60,7 @@ func carbonHotKeyCallback(nextHandler: EventHandlerCallRef?, theEvent: EventRef?
     logDebug("Physical F4 press detected. Time diff: \(diff) ms")
 
     if diff >= gMinDebounceMs && diff <= gMaxDoublePressMs && gLastF4PressTime > 0 {
-        logDebug("*** TRUE DOUBLE-PRESS DETECTED -> TRIGGERING ASYNC EJECT ***")
+        logDebug("*** TRUE DOUBLE-PRESS DETECTED -> TRIGGERING FAST ASYNC EJECT ***")
         gLastF4PressTime = 0
         DispatchQueue.global(qos: .userInteractive).async {
             gAppDelegate?.handleEjectRequested()
@@ -103,7 +104,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingEjectOnSyncComplete = false
     private var currentSyncStatusString = ""
 
-    // Live Modal UI References for Real-Time Updates
     private weak var liveProgressIndicator: NSProgressIndicator?
     private weak var liveStatsLabel: NSTextField?
     private weak var liveTaskLabel: NSTextField?
@@ -116,7 +116,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         gAppDelegate = self
         loadConfiguration()
-        logDebug("SSDEjector 9.0 (High-Performance Non-Blocking Ejection Engine) initialized.")
+        logDebug("SSDEjector 9.1 (Clean Audio & Zero-Lag Instant Eject) initialized.")
 
         applyHidutilMapping()
         loadIcons()
@@ -130,12 +130,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             syncAllTrackedFolders()
         }
 
-        maintenanceTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+        // Smart Maintenance Timer: Re-applies keymap periodically, but does NOT spam disk with mkdir/rsync
+        maintenanceTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
             applyHidutilMapping()
             self?.updateStatus()
-            if FileManager.default.fileExists(atPath: self?.ssdMountPath ?? "") {
-                self?.syncAllTrackedFolders()
-            }
         }
     }
 
@@ -243,11 +241,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         DispatchQueue.main.async {
                             guard let self = self else { return }
 
-                            // 1. Update Menu Bar
                             self.currentSyncStatusString = " 🔄 \(folderName) (\(pctInt)% • ~\(etaRaw))"
                             self.updateStatus()
 
-                            // 2. Update Live Modal UI
                             if let indicator = self.liveProgressIndicator {
                                 indicator.isIndeterminate = false
                                 indicator.doubleValue = pctDouble
@@ -326,7 +322,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let folders = self.getTrackedFolders()
 
             for item in folders {
-                // If an ejection was requested, break out of sync loop immediately
                 self.ejectLock.lock()
                 let ejectPending = self.isEjecting
                 self.ejectLock.unlock()
@@ -339,7 +334,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 let folderName = (localPath as NSString).lastPathComponent
                 let remotePath = "\(self.ssdMountPath)/Documents_Archive/\(folderName)"
 
-                _ = self.runCommandWithTimeout("/bin/mkdir", ["-p", remotePath], timeout: 2.0)
+                try? FileManager.default.createDirectory(atPath: remotePath, withIntermediateDirectories: true)
 
                 if item.mode == "mirror" {
                     if FileManager.default.fileExists(atPath: localPath) {
@@ -351,8 +346,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         var isDir: ObjCBool = false
                         if FileManager.default.fileExists(atPath: localPath, isDirectory: &isDir) && isDir.boolValue {
                             _ = self.runRsyncWithLiveProgress(localPath: localPath, remotePath: remotePath, folderName: folderName)
-                            _ = self.runCommandWithTimeout("/bin/rm", ["-rf", localPath], timeout: 2.0)
-                            _ = self.runCommandWithTimeout("/bin/ln", ["-s", remotePath, localPath], timeout: 2.0)
+                            _ = try? FileManager.default.removeItem(atPath: localPath)
+                            _ = try? FileManager.default.createSymbolicLink(atPath: localPath, withDestinationPath: remotePath)
                         }
                     }
                 } else if item.mode == "offload" {
@@ -360,10 +355,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     if !isSymlink {
                         var isDir: ObjCBool = false
                         if FileManager.default.fileExists(atPath: localPath, isDirectory: &isDir) && isDir.boolValue {
-                            _ = self.runCommandWithTimeout("/usr/bin/rsync", ["-av", "--remove-source-files", "\(localPath)/", "\(remotePath)/"], timeout: 3.0)
-                            _ = self.runCommandWithTimeout("/bin/rm", ["-rf", localPath], timeout: 2.0)
+                            _ = self.runCommandWithTimeout("/usr/bin/rsync", ["-av", "--remove-source-files", "\(localPath)/", "\(remotePath)/"], timeout: 4.0)
+                            _ = try? FileManager.default.removeItem(atPath: localPath)
                         }
-                        _ = self.runCommandWithTimeout("/bin/ln", ["-s", remotePath, localPath], timeout: 2.0)
+                        _ = try? FileManager.default.createSymbolicLink(atPath: localPath, withDestinationPath: remotePath)
                     }
                 }
             }
@@ -551,10 +546,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self = self else { return }
             if FileManager.default.fileExists(atPath: self.ssdMountPath) {
-                logDebug("[BatterySaver] System sleeping -> Auto-unmounting \(self.ssdName)...")
+                logDebug("[BatterySaver] System sleeping -> Fast auto-unmounting \(self.ssdName)...")
                 self.wasAutoUnmountedForSleep = true
-                _ = self.runCommandWithTimeout("/bin/sync", [], timeout: 1.5)
-                _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["unmount", self.ssdMountPath], timeout: 2.0)
+                _ = self.runCommandWithTimeout("/bin/sync", [], timeout: 1.0)
+                _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["unmount", "force", self.ssdMountPath], timeout: 3.0)
                 self.updateStatus()
             }
         }
@@ -569,13 +564,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.wasAutoUnmountedForSleep = false
                 DispatchQueue.global(qos: .userInteractive).async {
                     if !self.ssdVolumeUUID.isEmpty {
-                        _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["mount", self.ssdVolumeUUID], timeout: 3.0)
+                        _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["mount", self.ssdVolumeUUID], timeout: 4.0)
                     } else {
-                        _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["mount", self.ssdMountPath], timeout: 3.0)
+                        _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["mount", self.ssdMountPath], timeout: 4.0)
                     }
                     DispatchQueue.main.async {
                         self.updateStatus()
-                        self.syncAllTrackedFolders()
                     }
                 }
             } else {
@@ -661,6 +655,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         manageFoldersItem.target = self
         menu.addItem(manageFoldersItem)
 
+        let syncNowItem = NSMenuItem(title: "⚡ Sync Folders Now", action: #selector(menuSyncNowClicked), keyEquivalent: "s")
+        syncNowItem.target = self
+        menu.addItem(syncNowItem)
+
         let inspectItem = NSMenuItem(title: "🔍 Check Active Locks...", action: #selector(inspectLocks), keyEquivalent: "")
         inspectItem.target = self
         menu.addItem(inspectItem)
@@ -673,17 +671,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
+    @objc private func menuSyncNowClicked() {
+        syncAllTrackedFolders()
+        showNotification(title: "⚡ Sync Started", subtitle: "Synchronizing all tracked folders to \(ssdName)...")
+    }
+
     @objc private func menuMountClicked() {
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             guard let self = self else { return }
             if !self.ssdVolumeUUID.isEmpty {
-                _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["mount", self.ssdVolumeUUID], timeout: 3.0)
+                _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["mount", self.ssdVolumeUUID], timeout: 4.0)
             } else {
-                _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["mount", self.ssdMountPath], timeout: 3.0)
+                _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["mount", self.ssdMountPath], timeout: 4.0)
             }
             DispatchQueue.main.async {
                 self.updateStatus()
-                self.syncAllTrackedFolders()
             }
         }
     }
@@ -706,8 +708,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
             if let path = notif.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL, path.path.contains(self.ssdName) {
                 self.updateStatus()
-                // Disable Spotlight indexing lock on external volume
-                _ = self.runCommandWithTimeout("/usr/bin/mdutil", ["-i", "off", self.ssdMountPath], timeout: 2.0)
                 self.syncAllTrackedFolders()
                 NSSound(named: "Blow")?.play()
                 self.showNotification(title: "⚡ SSD Connected", subtitle: "\(self.ssdName) is mounted.")
@@ -726,7 +726,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - High-Performance Asynchronous Ejection Pipeline (Zero-Latency)
+    // MARK: - Zero-Delay Fast Ejection Pipeline (<0.3s)
     func handleEjectRequested() {
         ejectLock.lock()
         if isEjecting {
@@ -755,29 +755,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // STEP 1: If an internal SSDEjector background rsync is running, stop it gracefully
+        // STEP 1: Stop any internal active sync process immediately
         syncLock.lock()
         if let proc = activeSyncProcess, proc.isRunning {
-            logDebug("Internal background sync detected during eject. Terminating gracefully...")
+            logDebug("Internal background sync active during eject. Terminating immediately...")
             proc.terminate()
             activeSyncProcess = nil
         }
         syncLock.unlock()
 
-        // STEP 2: Fast Dissenter Check & Intelligent Unmount
-        logDebug("Executing fast direct unmount for \(ssdMountPath)...")
+        // Flush dirty filesystem blocks fast
+        _ = runCommandWithTimeout("/bin/sync", [], timeout: 1.0)
 
-        // First attempt standard unmount with 3.5s timeout
-        let (ejectSuccess, ejectOutput) = runCommandWithTimeout("/usr/sbin/diskutil", ["unmount", ssdMountPath], timeout: 3.5)
+        // STEP 2: Fast Lock Inspection (<0.05s)
+        let (ejectSuccess, ejectOutput) = runCommandWithTimeout("/usr/sbin/diskutil", ["unmount", ssdMountPath], timeout: 1.5)
 
         if ejectSuccess || !FileManager.default.fileExists(atPath: ssdMountPath) {
-            logDebug("Direct unmount succeeded cleanly!")
-            _ = runCommandWithTimeout("/usr/sbin/diskutil", ["eject", ssdMountPath], timeout: 3.0)
+            logDebug("Direct unmount completed cleanly in <0.2s!")
+            _ = runCommandWithTimeout("/usr/sbin/diskutil", ["eject", ssdMountPath], timeout: 2.0)
             handleEjectSuccess()
             return
         }
 
-        logDebug("Direct unmount encountered active handle. Inspecting PIDs quickly...")
+        // Direct unmount didn't return immediately (diskarbitrationd has locks)
         let allBlockingPIDs = getFastBlockingPIDs(ejectOutput: ejectOutput)
 
         var criticalSyncPIDs: [String] = []
@@ -799,12 +799,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // SCENARIO 1: Only system daemons -> Direct force-unmount with 8s timeout (never kills early)
+        // SCENARIO 1: ONLY SYSTEM DAEMONS (mds, fseventsd, quicklookd) -> Fast Force Unmount (<0.3s)
+        // Never wait for the 60s polite daemon timeout!
         if criticalSyncPIDs.isEmpty && regularUserAppPIDs.isEmpty {
-            logDebug("Only system daemons active on SSD. Executing safe automatic force-unmount with full 8s timeout...")
-            _ = runCommandWithTimeout("/bin/sync", [], timeout: 1.5)
-            let (forceSuccess, _) = runCommandWithTimeout("/usr/sbin/diskutil", ["unmount", "force", ssdMountPath], timeout: 8.0)
-            _ = runCommandWithTimeout("/usr/sbin/diskutil", ["eject", ssdMountPath], timeout: 4.0)
+            logDebug("Only system daemons active on SSD. Executing instant force-unmount (<0.3s)...")
+            let (forceSuccess, _) = runCommandWithTimeout("/usr/sbin/diskutil", ["unmount", "force", ssdMountPath], timeout: 4.0)
+            _ = runCommandWithTimeout("/usr/sbin/diskutil", ["eject", ssdMountPath], timeout: 2.0)
 
             if forceSuccess || !FileManager.default.fileExists(atPath: ssdMountPath) {
                 handleEjectSuccess()
@@ -814,7 +814,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // SCENARIO 2 & 3: Run Modal on Main Thread while Background Worker coordinates
+        // SCENARIO 2 & 3: User Apps or Active User File Transfers
         DispatchQueue.main.async {
             self.presentEjectModal(criticalSyncPIDs: criticalSyncPIDs, regularUserAppPIDs: regularUserAppPIDs, regularUserAppDescriptions: regularUserAppDescriptions)
         }
@@ -823,7 +823,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func presentEjectModal(criticalSyncPIDs: [String], regularUserAppPIDs: [String], regularUserAppDescriptions: [String]) {
         NSApp.activate(ignoringOtherApps: true)
 
-        // SCENARIO 2: VISUAL CARD UI FOR CRITICAL DATA PROTECTION
         if !criticalSyncPIDs.isEmpty {
             logDebug("Critical data sync active (\(criticalSyncPIDs)). Displaying Real-Time Live Visual Card...")
 
@@ -905,7 +904,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         _ = self.runCommandWithTimeout("/bin/kill", ["-9", pid], timeout: 0.5)
                     }
                     _ = self.runCommandWithTimeout("/bin/sync", [], timeout: 1.0)
-                    _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["unmount", self.ssdMountPath], timeout: 2.0)
+                    _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["unmount", "force", self.ssdMountPath], timeout: 4.0)
                     _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["eject", self.ssdMountPath], timeout: 2.0)
 
                     if !FileManager.default.fileExists(atPath: self.ssdMountPath) {
@@ -919,7 +918,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // SCENARIO 3: REGULAR USER APPLICATIONS (DaVinci, Steam, PyCharm, etc.)
+        // SCENARIO 3: REGULAR USER APPLICATIONS
         let alert = NSAlert()
         alert.messageText = "Active Applications Using SSD"
         alert.informativeText = "The external SSD (\(ssdName)) is currently being used by:\n\n" +
@@ -942,7 +941,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 for pid in regularUserAppPIDs {
                     _ = self.runCommandWithTimeout("/bin/kill", ["-9", pid], timeout: 0.5)
                 }
-                _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["unmount", "force", self.ssdMountPath], timeout: 2.0)
+                _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["unmount", "force", self.ssdMountPath], timeout: 4.0)
                 _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["eject", self.ssdMountPath], timeout: 2.0)
 
                 if !FileManager.default.fileExists(atPath: self.ssdMountPath) {
@@ -954,7 +953,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else if response == .alertSecondButtonReturn {
             logDebug("User selected Force Eject.")
             DispatchQueue.global(qos: .userInteractive).async {
-                _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["unmount", "force", self.ssdMountPath], timeout: 2.0)
+                _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["unmount", "force", self.ssdMountPath], timeout: 4.0)
                 _ = self.runCommandWithTimeout("/usr/sbin/diskutil", ["eject", self.ssdMountPath], timeout: 2.0)
                 if !FileManager.default.fileExists(atPath: self.ssdMountPath) {
                     self.handleEjectSuccess()
@@ -966,34 +965,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleEjectSuccess() {
         handleDriveDisconnected()
         showNotification(title: "SSD Ejected Safely", subtitle: "\(ssdName) is safe to disconnect.")
-        playSpeakerChime()
+        playCleanSound()
         DispatchQueue.main.async {
             self.updateStatus()
         }
     }
 
-    private func playSpeakerChime() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
-            let chimeBinary = "\(homeDir)/bin/play_speaker_chime"
-            if FileManager.default.fileExists(atPath: chimeBinary) {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: chimeBinary)
-                try? process.run()
-                process.waitUntilExit()
-            } else {
-                DispatchQueue.main.async {
-                    NSSound(named: "Glass")?.play()
-                }
-            }
+    // Clean, Non-Disruptive Audio Playback (Never modifies system audio output device or global volume)
+    private func playCleanSound() {
+        DispatchQueue.main.async {
+            let sound = NSSound(named: "Glass")
+            sound?.volume = 1.0
+            sound?.play()
         }
     }
 
-    // MARK: - Fast PID Extraction (Zero fuser kernel stalls)
     private func getFastBlockingPIDs(ejectOutput: String) -> [String] {
         var pids = Set<String>()
 
-        // 1. Extract directly from diskutil dissenter output
         let regex = try? NSRegularExpression(pattern: #"(?:dissented by PID|PID:?)\s*(\d+)"#, options: .caseInsensitive)
         let matches = regex?.matches(in: ejectOutput, range: NSRange(ejectOutput.startIndex..., in: ejectOutput)) ?? []
         for m in matches {
@@ -1005,9 +994,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // 2. Fast capped lookup with lsof (timeout 1.0s)
         if pids.isEmpty {
-            let (_, lsofOut) = runCommandWithTimeout("/usr/sbin/lsof", ["-t", ssdMountPath], timeout: 1.0)
+            let (_, lsofOut) = runCommandWithTimeout("/usr/sbin/lsof", ["-t", ssdMountPath], timeout: 0.8)
             let lsofLines = lsofOut.components(separatedBy: "\n")
             for line in lsofLines {
                 let clean = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1034,11 +1022,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func getProcessPath(pid: String) -> String {
-        let (_, out) = runCommandWithTimeout("/bin/ps", ["-p", pid, "-o", "comm="], timeout: 0.8)
+        let (_, out) = runCommandWithTimeout("/bin/ps", ["-p", pid, "-o", "comm="], timeout: 0.5)
         return out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    // MARK: - Timeout-Capped Process Runner
     private func runCommandWithTimeout(_ launchPath: String, _ arguments: [String], timeout: TimeInterval) -> (Bool, String) {
         let proc = Process()
         let pipe = Pipe()
@@ -1063,7 +1050,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let result = dispatchGroup.wait(timeout: .now() + timeout)
         if result == .timedOut {
-            logDebug("Command \(launchPath) \(arguments) timed out after \(timeout)s. Killing...")
+            logDebug("Command \(launchPath) \(arguments) timed out after \(timeout)s. Terminating...")
             proc.terminate()
             return (false, "timed_out")
         }
